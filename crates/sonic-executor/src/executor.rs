@@ -15,8 +15,9 @@ use crate::Channel;
 use iceoryx2::node::Node;
 use iceoryx2::prelude::ipc;
 use iceoryx2::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// One registered task entry.
 pub(crate) struct TaskEntry {
@@ -129,6 +130,303 @@ impl ExecutorBuilder {
         })
     }
 }
+
+// ── Run loop ──────────────────────────────────────────────────────────────────
+
+impl Executor {
+    /// Run the executor until [`Stoppable::stop`] is called or a task signals
+    /// stop via [`Context::stop_executor`].
+    pub fn run(&mut self) -> Result<(), ExecutorError> {
+        self.run_inner(RunMode::Forever)
+    }
+
+    /// Run for at most `max` wall-clock duration, then return.
+    pub fn run_for(&mut self, max: Duration) -> Result<(), ExecutorError> {
+        self.run_inner(RunMode::Until(Instant::now() + max))
+    }
+
+    /// Run until `n` full barrier-cycles (`WaitSet` wakeups) have completed.
+    pub fn run_n(&mut self, n: usize) -> Result<(), ExecutorError> {
+        self.run_inner(RunMode::Iterations(n))
+    }
+
+    /// Run until `predicate()` returns true. Checked after each `WaitSet`
+    /// wakeup.
+    pub fn run_until<F: FnMut() -> bool>(
+        &mut self,
+        mut predicate: F,
+    ) -> Result<(), ExecutorError> {
+        self.run_inner(RunMode::Predicate(&mut predicate))
+    }
+}
+
+enum RunMode<'a> {
+    Forever,
+    Until(Instant),
+    Iterations(usize),
+    Predicate(&'a mut dyn FnMut() -> bool),
+}
+
+impl Executor {
+    fn run_inner(&mut self, mut mode: RunMode<'_>) -> Result<(), ExecutorError> {
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Err(ExecutorError::AlreadyRunning);
+        }
+        // Reset stop flag for re-runs.
+        // NOTE: Stoppable handles obtained before run() via stoppable() are
+        // NOT bound to this run's stop flag. Task 9 will re-architect this to
+        // propagate waker-aware Stoppable handles to existing clones.
+        self.stoppable = Stoppable::new();
+
+        let result = self.dispatch_loop(&mut mode);
+
+        self.running.store(false, Ordering::SeqCst);
+        result
+    }
+
+    #[allow(
+        unsafe_code,
+        clippy::too_many_lines,
+        clippy::ref_as_ptr,
+        clippy::borrow_as_ptr
+    )]
+    fn dispatch_loop(&mut self, mode: &mut RunMode<'_>) -> Result<(), ExecutorError> {
+        let waitset: WaitSet<ipc::Service> = WaitSetBuilder::new()
+            .create()
+            .map_err(ExecutorError::iceoryx2)?;
+
+        // Keep Arc<RawListener> alive for at least as long as the WaitSet
+        // guards — the guard borrows the listener via 'attachment lifetime.
+        let mut listener_storage: Vec<Arc<crate::trigger::RawListener>> = Vec::new();
+        // Guards must outlive the run loop.
+        let mut guards: Vec<WaitSetGuard<'_, '_, ipc::Service>> = Vec::new();
+        // Maps guard index → task index.
+        let mut attachment_to_task: Vec<usize> = Vec::new();
+
+        for (task_idx, task) in self.tasks.iter().enumerate() {
+            for decl in &task.decls {
+                match decl {
+                    TriggerDecl::Subscriber { listener } => {
+                        // Clone Arc to extend listener lifetime to this scope.
+                        let l = Arc::clone(listener);
+                        listener_storage.push(l);
+                        let l_ref = listener_storage.last().unwrap().as_ref();
+                        // SAFETY: we cast the reference lifetime to match
+                        // 'waitset / 'attachment; both listener_storage and
+                        // waitset are stack-local and dropped together at the
+                        // end of dispatch_loop.  Guards are dropped before
+                        // listener_storage below.
+                        let l_ref: &crate::trigger::RawListener =
+                            unsafe { &*(l_ref as *const _) };
+                        let guard = waitset
+                            .attach_notification(l_ref)
+                            .map_err(ExecutorError::iceoryx2)?;
+                        guards.push(guard);
+                        attachment_to_task.push(task_idx);
+                    }
+                    TriggerDecl::Interval(d) => {
+                        let guard = waitset
+                            .attach_interval(*d)
+                            .map_err(ExecutorError::iceoryx2)?;
+                        guards.push(guard);
+                        attachment_to_task.push(task_idx);
+                    }
+                    TriggerDecl::Deadline { listener, deadline } => {
+                        let l = Arc::clone(listener);
+                        listener_storage.push(l);
+                        let l_ref = listener_storage.last().unwrap().as_ref();
+                        let l_ref: &crate::trigger::RawListener =
+                            unsafe { &*(l_ref as *const _) };
+                        let guard = waitset
+                            .attach_deadline(l_ref, *deadline)
+                            .map_err(ExecutorError::iceoryx2)?;
+                        guards.push(guard);
+                        attachment_to_task.push(task_idx);
+                    }
+                    TriggerDecl::RawListener(listener) => {
+                        let l = Arc::clone(listener);
+                        listener_storage.push(l);
+                        let l_ref = listener_storage.last().unwrap().as_ref();
+                        let l_ref: &crate::trigger::RawListener =
+                            unsafe { &*(l_ref as *const _) };
+                        let guard = waitset
+                            .attach_notification(l_ref)
+                            .map_err(ExecutorError::iceoryx2)?;
+                        guards.push(guard);
+                        attachment_to_task.push(task_idx);
+                    }
+                }
+            }
+        }
+
+        let iterations_done = AtomicUsize::new(0);
+        let stop_flag = self.stoppable.clone();
+
+        loop {
+            let iter_err: Arc<std::sync::Mutex<Option<ExecutorError>>> =
+                Arc::new(std::sync::Mutex::new(None));
+
+            // SAFETY: we capture &mut self.tasks via a raw pointer because
+            // wait_and_process_once expects FnMut and Rust cannot see that
+            // the closure doesn't outlive `self`. We ensure:
+            //   1. The closure runs synchronously within this call.
+            //   2. We call pool.barrier() before returning, so all pool
+            //      workers that dereference item_ptr have completed.
+            //   3. self.tasks is not mutated while the run loop is active.
+            let tasks_ptr = &mut self.tasks as *mut Vec<TaskEntry>;
+            let pool = &self.pool;
+            let stoppable_inner = self.stoppable.clone();
+
+            let cb_result = waitset.wait_and_process_once(
+                |attachment_id: WaitSetAttachmentId<ipc::Service>| {
+                    for (i, guard) in guards.iter().enumerate() {
+                        let fired = attachment_id.has_event_from(guard)
+                            || attachment_id.has_missed_deadline(guard);
+                        if !fired {
+                            continue;
+                        }
+                        let task_idx = attachment_to_task[i];
+
+                        // SAFETY: we are the only thread that may touch
+                        // `self` during the callback. wait_and_process_once
+                        // is single-threaded; we hold &mut self in
+                        // dispatch_loop. The pointer is valid for the
+                        // duration of this closure.
+                        let task = unsafe { &mut (&mut *tasks_ptr)[task_idx] };
+                        let id = task.id.clone();
+                        // SAFETY: SendItemPtr safety doc above. barrier()
+                        // guarantees exclusive access within each iteration.
+                        let item_ptr =
+                            SendItemPtr::new(task.item.as_mut() as *mut _);
+                        let stop = stoppable_inner.clone();
+                        let err_slot = Arc::clone(&iter_err);
+
+                        pool.submit(move || {
+                            // item_ptr.get() is a method call — Rust 2021
+                            // per-field capture analysis captures the whole
+                            // SendItemPtr (Send) rather than the inner raw
+                            // pointer field (not Send by default).
+                            let raw = item_ptr.get();
+                            let mut ctx = crate::context::Context::new(&id, &stop);
+                            // SAFETY: pool.barrier() (below) is called
+                            // before we leave the callback scope, so
+                            // the borrow of task.item is bounded to this
+                            // iteration.
+                            #[allow(clippy::option_if_let_else)]
+                            let res: crate::ExecuteResult = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| unsafe {
+                                    (*raw).execute(&mut ctx)
+                                }),
+                            )
+                            .unwrap_or_else(|payload| {
+                                let msg =
+                                    if let Some(s) = payload.downcast_ref::<&str>() {
+                                        (*s).to_string()
+                                    } else if let Some(s) =
+                                        payload.downcast_ref::<String>()
+                                    {
+                                        s.clone()
+                                    } else {
+                                        "panicked task".to_string()
+                                    };
+                                Err::<crate::ControlFlow, crate::ItemError>(Box::new(
+                                    PanickedTask(msg),
+                                ))
+                            });
+                            if let Err(source) = res {
+                                let mut slot = err_slot.lock().unwrap();
+                                if slot.is_none() {
+                                    *slot = Some(ExecutorError::Item {
+                                        task_id: id,
+                                        source,
+                                    });
+                                }
+                            }
+                        });
+                    }
+
+                    // Wait for all submitted jobs to finish before leaving
+                    // the callback scope (validates item_ptr safety contract).
+                    pool.barrier();
+                    CallbackProgression::Continue
+                },
+            );
+
+            cb_result.map_err(ExecutorError::iceoryx2)?;
+
+            // Extract the error before dropping the MutexGuard — avoids
+            // holding the lock across the return (clippy::significant_drop_in_scrutinee).
+            let maybe_err = iter_err.lock().unwrap().take();
+            if let Some(err) = maybe_err {
+                return Err(err);
+            }
+            if stop_flag.is_stopped() {
+                return Ok(());
+            }
+
+            iterations_done.fetch_add(1, Ordering::SeqCst);
+            match mode {
+                RunMode::Forever => {}
+                RunMode::Iterations(n) => {
+                    if iterations_done.load(Ordering::SeqCst) >= *n {
+                        return Ok(());
+                    }
+                }
+                RunMode::Until(deadline) => {
+                    if Instant::now() >= *deadline {
+                        return Ok(());
+                    }
+                }
+                RunMode::Predicate(p) => {
+                    if (p)() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Wraps a `*mut dyn ExecutableItem` so it can cross thread boundaries inside
+/// `Pool::submit`. The send is safe because:
+///   1. The executor guarantees at most one invocation of a given item at a
+///      time (via `pool.barrier()` before the pointer is reused).
+///   2. `ExecutableItem: Send`, so moving the pointee across threads is sound
+///      when no aliasing exists.
+#[allow(unsafe_code)]
+struct SendItemPtr {
+    ptr: *mut dyn ExecutableItem,
+}
+
+impl SendItemPtr {
+    fn new(ptr: *mut dyn ExecutableItem) -> Self {
+        Self { ptr }
+    }
+
+    /// Returns the raw pointer. Call inside the closure so that Rust 2021
+    /// per-field capture analysis captures `self` (the whole `SendItemPtr`,
+    /// which is `Send`) rather than `self.ptr` (which is not `Send`).
+    fn get(self) -> *mut dyn ExecutableItem {
+        self.ptr
+    }
+}
+
+// SAFETY: see doc comment above.
+#[allow(unsafe_code)]
+unsafe impl Send for SendItemPtr {}
+
+#[derive(Debug)]
+struct PanickedTask(String);
+
+impl core::fmt::Display for PanickedTask {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "task panicked: {}", self.0)
+    }
+}
+
+impl std::error::Error for PanickedTask {}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
