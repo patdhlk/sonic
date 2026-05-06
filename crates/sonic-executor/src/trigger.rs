@@ -25,6 +25,10 @@ pub(crate) enum TriggerDecl {
     /// Wake periodically.
     Interval(Duration),
     /// Wake on the listener firing OR after `deadline` elapses without one.
+    ///
+    /// `listener` and `deadline` live in the same variant because iceoryx2's
+    /// `WaitSet::attach_deadline` takes both atomically; splitting them here
+    /// would create a footgun where one could be attached without the other.
     Deadline {
         /// Listener cloned from the subscriber's paired event service.
         listener: Arc<RawListener>,
@@ -69,8 +73,8 @@ impl TriggerDeclarer<'_> {
     }
 
     /// Declare a periodic interval trigger.
-    pub fn interval(&mut self, period: Duration) -> &mut Self {
-        self.decls.push(TriggerDecl::Interval(period));
+    pub fn interval(&mut self, period: impl Into<Duration>) -> &mut Self {
+        self.decls.push(TriggerDecl::Interval(period.into()));
         self
     }
 
@@ -79,11 +83,11 @@ impl TriggerDeclarer<'_> {
     pub fn deadline<T: ZeroCopySend + Default + core::fmt::Debug + 'static>(
         &mut self,
         sub: &Subscriber<T>,
-        deadline: Duration,
+        deadline: impl Into<Duration>,
     ) -> &mut Self {
         self.decls.push(TriggerDecl::Deadline {
             listener: sub.listener_handle(),
-            deadline,
+            deadline: deadline.into(),
         });
         self
     }
@@ -119,20 +123,24 @@ mod tests {
     #[repr(C)]
     struct Msg(u32);
 
-    fn make_subscriber() -> crate::Subscriber<Msg> {
+    fn make_subscriber(topic: &str) -> crate::Subscriber<Msg> {
         use iceoryx2::prelude::*;
         let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-        let ch = crate::Channel::<Msg>::open_or_create(&node, "sonic.test.trig").unwrap();
+        let ch = crate::Channel::<Msg>::open_or_create(&node, topic).unwrap();
         ch.subscriber().unwrap()
     }
 
     #[test]
     fn collects_subscriber_decl() {
-        let sub = make_subscriber();
+        let sub = make_subscriber("sonic.test.trig.sub");
+        let expected = sub.listener_handle();
         let mut d = TriggerDeclarer::new_test();
         d.subscriber(&sub);
         assert_eq!(d.decls.len(), 1);
-        assert!(matches!(d.decls[0], TriggerDecl::Subscriber { .. }));
+        let TriggerDecl::Subscriber { listener } = &d.decls[0] else {
+            panic!("expected Subscriber variant");
+        };
+        assert!(std::sync::Arc::ptr_eq(listener, &expected));
     }
 
     #[test]
@@ -144,16 +152,34 @@ mod tests {
 
     #[test]
     fn collects_deadline_decl() {
-        let sub = make_subscriber();
+        let sub = make_subscriber("sonic.test.trig.deadline");
+        let expected_listener = sub.listener_handle();
         let mut d = TriggerDeclarer::new_test();
         d.deadline(&sub, Duration::from_millis(50));
-        assert!(matches!(d.decls[0], TriggerDecl::Deadline { .. }));
+        let TriggerDecl::Deadline { listener, deadline } = &d.decls[0] else {
+            panic!("expected Deadline variant");
+        };
+        assert!(std::sync::Arc::ptr_eq(listener, &expected_listener));
+        assert_eq!(*deadline, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn collects_raw_listener_decl() {
+        let sub = make_subscriber("sonic.test.trig.raw");
+        let handle = sub.listener_handle();
+        let expected = std::sync::Arc::clone(&handle);
+        let mut d = TriggerDeclarer::new_test();
+        d.raw_listener(handle);
+        let TriggerDecl::RawListener(stored) = &d.decls[0] else {
+            panic!("expected RawListener variant");
+        };
+        assert!(std::sync::Arc::ptr_eq(stored, &expected));
     }
 
     #[test]
     #[allow(clippy::unnecessary_wraps)]
     fn declarer_chains() -> Result<(), ExecutorError> {
-        let sub = make_subscriber();
+        let sub = make_subscriber("sonic.test.trig.chain");
         let mut d = TriggerDeclarer::new_test();
         d.subscriber(&sub).interval(Duration::from_millis(10));
         assert_eq!(d.decls.len(), 2);
