@@ -66,7 +66,10 @@ where
 
 /// Wrap a pair of closures (`declare`, `execute`) as an [`ExecutableItem`].
 pub struct FnItemWithTriggers<D, E> {
+    /// `Some` until the first `declare_triggers` call; `None` thereafter.
+    /// `Option::take` enforces the once-only guarantee — do not unwrap directly.
     declare: Option<D>,
+    /// User-supplied execute closure invoked on every dispatch.
     execute: E,
 }
 

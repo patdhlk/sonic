@@ -2,8 +2,6 @@
 //! the [`TriggerDeclarer`]; the executor consumes the declarations at add-time
 //! and turns them into `WaitSet` attachments inside its run loop.
 
-use crate::error::ExecutorError;
-
 /// Collects trigger intentions; consumed by the executor at add-time.
 ///
 /// The full surface lands in Task 5. This stub exists so [`ExecutableItem`]
@@ -34,6 +32,3 @@ impl TriggerDeclarer<'_> {
         Self::new_internal()
     }
 }
-
-#[allow(dead_code)]
-fn _silence(_: ExecutorError) {}
