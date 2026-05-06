@@ -33,7 +33,10 @@ impl Tracker {
 
     fn complete(&self) {
         self.completed.fetch_add(1, Ordering::SeqCst);
-        let _g = self.lock.lock().unwrap();
+        // Acquire+drop the lock to establish happens-before with the waiter,
+        // then notify *after* releasing — avoids a wake-then-sleep cycle under
+        // high completion rate.
+        drop(self.lock.lock().unwrap());
         self.cv.notify_all();
     }
 
@@ -123,6 +126,9 @@ impl Pool {
                 self.tracker.complete();
             }
             PoolMode::Threaded { tx, .. } => {
+                // Safe to expect: the channel sender lives in self, and self can't be
+                // dropped while we hold &self. The only path to a closed channel is
+                // Pool::drop, which can't run concurrently with submit().
                 tx.send(Box::new(f)).expect("pool channel closed");
             }
         }
@@ -198,6 +204,14 @@ mod tests {
         pool.submit(|| panic!("kaboom"));
         pool.submit(|| {});
         pool.barrier();
-        // No assertion — barrier must not hang because of the panic.
+        // Both jobs must be marked complete even though one panicked. If they
+        // weren't, barrier would have hung — but we make the postcondition
+        // explicit so a future regression of "tracker.complete() skipped on
+        // panic" surfaces as an assertion failure rather than a 60s hang.
+        assert_eq!(
+            pool.tracker.submitted.load(Ordering::SeqCst),
+            pool.tracker.completed.load(Ordering::SeqCst),
+            "submitted vs completed counters diverged after panic"
+        );
     }
 }
