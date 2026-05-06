@@ -2,7 +2,6 @@
 //! that subscribers can be attached as triggers on the executor's `WaitSet`.
 
 use crate::error::ExecutorError;
-use core::marker::PhantomData;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::port::notifier::Notifier as IxNotifier;
 use iceoryx2::port::publisher::Publisher as IxPublisher;
@@ -23,7 +22,6 @@ type IpcService = ipc::Service;
 pub struct Channel<T: core::fmt::Debug + ZeroCopySend + 'static> {
     pubsub: iceoryx2::service::port_factory::publish_subscribe::PortFactory<IpcService, T, ()>,
     event: iceoryx2::service::port_factory::event::PortFactory<IpcService>,
-    _marker: PhantomData<T>,
 }
 
 impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
@@ -52,11 +50,7 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
             .open_or_create()
             .map_err(ExecutorError::iceoryx2)?;
 
-        Ok(Arc::new(Self {
-            pubsub,
-            event,
-            _marker: PhantomData,
-        }))
+        Ok(Arc::new(Self { pubsub, event }))
     }
 
     /// Create a new publisher attached to this channel.
@@ -71,11 +65,7 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
             .notifier_builder()
             .create()
             .map_err(ExecutorError::iceoryx2)?;
-        Ok(Publisher {
-            inner,
-            notifier,
-            _channel: Arc::clone(self),
-        })
+        Ok(Publisher { inner, notifier })
     }
 
     /// Create a new subscriber attached to this channel.
@@ -95,11 +85,7 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
         // service type satisfies the bounds at this generic call site).
         #[allow(clippy::arc_with_non_send_sync)]
         let listener = Arc::new(listener);
-        Ok(Subscriber {
-            inner,
-            listener,
-            _channel: Arc::clone(self),
-        })
+        Ok(Subscriber { inner, listener })
     }
 }
 
@@ -107,7 +93,6 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
 pub struct Publisher<T: core::fmt::Debug + ZeroCopySend + 'static> {
     inner: IxPublisher<IpcService, T, ()>,
     notifier: IxNotifier<IpcService>,
-    _channel: Arc<Channel<T>>,
 }
 
 impl<T: core::fmt::Debug + ZeroCopySend + 'static + Copy> Publisher<T> {
@@ -121,10 +106,7 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static + Copy> Publisher<T> {
     }
 }
 
-impl<T: core::fmt::Debug + ZeroCopySend + 'static> Publisher<T> {
-    /// Loan an uninitialised sample, run `f` to fill it, then send + notify.
-    /// Returns `Ok(false)` if `f` returns `false` — caller signalled "skip send".
-    ///
+impl<T: ZeroCopySend + Default + core::fmt::Debug + 'static> Publisher<T> {
     /// # Example
     ///
     /// ```no_run
@@ -144,22 +126,16 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Publisher<T> {
     /// publisher.loan_send(|t: &mut Tick| { t.0 = 1; true })?;
     /// # Ok(()) }
     /// ```
-    #[allow(unsafe_code)]
+    ///
+    /// Loan a sample initialised to `T::default()`, run `f` to fill it, then
+    /// send + notify. Returns `Ok(false)` if `f` returns `false` — caller
+    /// signalled "skip send".
     pub fn loan_send<F>(&self, f: F) -> Result<bool, ExecutorError>
     where
         F: FnOnce(&mut T) -> bool,
     {
-        let mut sample = self.inner.loan_uninit().map_err(ExecutorError::iceoryx2)?;
-        // SAFETY: zero-init is sound for ZeroCopySend types iceoryx2 supports.
-        // We let `f` overwrite. We do not require `Default` on `T`.
-        let payload_ptr = sample.payload_mut().as_mut_ptr();
-        unsafe { core::ptr::write_bytes(payload_ptr, 0, 1) };
-        // SAFETY: write_bytes above zero-initialised the payload; for any
-        // ZeroCopySend type accepted by iceoryx2, an all-zero bit pattern is
-        // a valid value (the trait requires types compatible with shared
-        // memory transport, which precludes types with niche bit-pattern
-        // requirements that would invalidate this).
-        let mut sample = unsafe { sample.assume_init() };
+        let sample = self.inner.loan_uninit().map_err(ExecutorError::iceoryx2)?;
+        let mut sample = sample.write_payload(T::default());
         let cont = f(sample.payload_mut());
         if !cont {
             return Ok(false);
@@ -175,7 +151,6 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static> Publisher<T> {
 pub struct Subscriber<T: core::fmt::Debug + ZeroCopySend + 'static> {
     inner: IxSubscriber<IpcService, T, ()>,
     listener: Arc<IxListener<IpcService>>,
-    _channel: Arc<Channel<T>>,
 }
 
 impl<T: core::fmt::Debug + ZeroCopySend + 'static> Subscriber<T> {

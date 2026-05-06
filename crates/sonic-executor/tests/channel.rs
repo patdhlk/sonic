@@ -13,7 +13,7 @@ fn publisher_send_notifies_subscriber_listener() {
 
     let channel: Arc<Channel<Msg>> = Channel::open_or_create(&node, "sonic.test.chan").unwrap();
 
-    let publisher  = channel.publisher().unwrap();
+    let publisher = channel.publisher().unwrap();
     let subscriber = channel.subscriber().unwrap();
 
     publisher.send_copy(Msg(42)).unwrap();
@@ -31,7 +31,7 @@ fn publisher_send_notifies_subscriber_listener() {
 }
 
 #[test]
-fn opening_same_channel_twice_yields_same_topic() {
+fn opening_same_channel_twice_does_not_panic() {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
     let _a: Arc<Channel<Msg>> = Channel::open_or_create(&node, "sonic.test.chan2").unwrap();
     let _b: Arc<Channel<Msg>> = Channel::open_or_create(&node, "sonic.test.chan2").unwrap();
