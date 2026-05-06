@@ -54,11 +54,18 @@ fn pubsub_event_waitset_round_trip() {
 
     waitset
         .wait_and_process(|_| {
-            // First wakeup is from the listener; we read and stop.
+            // Drain the listener unconditionally — the interval attachment may
+            // fire before the listener notification is delivered, so we must
+            // not assume the first wakeup originates from the listener.
             while let Ok(Some(_)) = listener.try_wait_one() {
                 got_event = true;
             }
-            CallbackProgression::Stop
+            // Keep looping until we have confirmed at least one listener event.
+            if got_event {
+                CallbackProgression::Stop
+            } else {
+                CallbackProgression::Continue
+            }
         })
         .expect("wait_and_process");
 
