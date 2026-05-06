@@ -11,6 +11,7 @@ mod error;
 mod executor;
 mod item;
 mod pool;
+mod runner;
 mod task_id;
 mod trigger;
 
@@ -20,5 +21,6 @@ pub use control_flow::{ControlFlow, ExecuteResult};
 pub use error::{ExecutorError, ItemError};
 pub use executor::{Executor, ExecutorBuilder};
 pub use item::{item, item_with_triggers, ExecutableItem, FnItem, FnItemWithTriggers};
+pub use runner::{Runner, RunnerFlags};
 pub use task_id::TaskId;
 pub use trigger::{RawListener, TriggerDeclarer};
