@@ -4,8 +4,10 @@
 //! design rationale.
 #![doc(html_root_url = "https://docs.rs/sonic-executor/0.1.0")]
 
+mod channel;
 mod error;
 mod task_id;
 
+pub use channel::{Channel, Publisher, Subscriber, EVENT_SUFFIX};
 pub use error::{ExecutorError, ItemError};
 pub use task_id::TaskId;
