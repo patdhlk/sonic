@@ -18,4 +18,4 @@ pub use control_flow::{ControlFlow, ExecuteResult};
 pub use error::{ExecutorError, ItemError};
 pub use item::{item, item_with_triggers, ExecutableItem, FnItem, FnItemWithTriggers};
 pub use task_id::TaskId;
-pub use trigger::TriggerDeclarer;
+pub use trigger::{RawListener, TriggerDeclarer};
