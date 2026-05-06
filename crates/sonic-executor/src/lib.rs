@@ -9,6 +9,7 @@ mod context;
 mod control_flow;
 mod error;
 mod item;
+mod pool;
 mod task_id;
 mod trigger;
 
