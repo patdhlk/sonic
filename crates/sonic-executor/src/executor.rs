@@ -13,11 +13,16 @@ use crate::task_id::TaskId;
 use crate::trigger::{TriggerDecl, TriggerDeclarer};
 use crate::Channel;
 use iceoryx2::node::Node;
+use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::prelude::ipc;
 use iceoryx2::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Monotonically increasing counter so multiple executors in the same process
+/// each get a unique stop-event service name.
+static EXEC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// One registered task entry.
 pub(crate) struct TaskEntry {
@@ -37,7 +42,19 @@ pub struct Executor {
     pub(crate) running: Arc<AtomicBool>,
     pub(crate) stoppable: Stoppable,
     pub(crate) next_id: AtomicU64,
+    /// Listener for the internal stop event service. Held here so it outlives
+    /// the `WaitSet` guard inside `dispatch_loop`. Created at `build()` time so
+    /// any `Stoppable` clone (taken before or after `run()`) carries the waker.
+    pub(crate) stop_listener: Arc<IxListener<ipc::Service>>,
 }
+
+// SAFETY: `IxListener<ipc::Service>` is `!Send` for the same Rc-based
+// `SingleThreaded` reason as `IxNotifier`. After construction, the only
+// per-iteration call is `listener.try_wait_one()`, which does not mutate the
+// Rc. `Executor` is never shared across threads (it requires `&mut self` for
+// `run()`), so there is no aliased concurrent mutation.
+#[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
+unsafe impl Send for Executor {}
 
 impl Executor {
     /// Start a new builder.
@@ -82,7 +99,9 @@ impl Executor {
         Ok(id)
     }
 
-    /// Returns a [`Stoppable`] handle; clone before calling `run()`.
+    /// Returns a [`Stoppable`] handle that is waker-aware from the moment the
+    /// executor is built. Clone before calling `run()` — any clone taken at any
+    /// time will wake the `WaitSet` when `stop()` is called.
     #[must_use]
     pub fn stoppable(&self) -> Stoppable {
         self.stoppable.clone()
@@ -109,7 +128,16 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Build the [`Executor`]. Creates a fresh iceoryx2 node.
+    /// Build the [`Executor`]. Creates a fresh iceoryx2 node and wires up the
+    /// internal stop-event service so that any `Stoppable` clone (taken before
+    /// or after `run()`) will wake the `WaitSet` when `stop()` is called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internally-generated stop-event service name exceeds the
+    /// iceoryx2 service name length limit (this cannot happen under normal use
+    /// because the name is derived from the process id and a monotonic counter).
+    #[allow(clippy::arc_with_non_send_sync)] // see SAFETY on `impl Send for Executor`
     pub fn build(self) -> Result<Executor, ExecutorError> {
         let node = NodeBuilder::new()
             .create::<ipc::Service>()
@@ -120,13 +148,47 @@ impl ExecutorBuilder {
             .unwrap_or_else(num_cpus::get_physical);
         let pool = Arc::new(Pool::new(n_workers)?);
 
+        // Build the internal stop event service with a unique-per-process name
+        // so multiple executors in the same process don't collide.
+        let exec_seq = EXEC_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let stop_topic = format!(
+            "sonic.exec.stop.{}.{exec_seq}.__sonic_event",
+            std::process::id()
+        );
+        let stop_event = node
+            .service_builder(&stop_topic.as_str().try_into().unwrap())
+            .event()
+            .open_or_create()
+            .map_err(ExecutorError::iceoryx2)?;
+
+        let stop_notifier = Arc::new(
+            stop_event
+                .notifier_builder()
+                .create()
+                .map_err(ExecutorError::iceoryx2)?,
+        );
+
+        // SAFETY: see module-level note; Arc<IxListener> is held here and only
+        // accessed on the executor thread.
+        let stop_listener = Arc::new(
+            stop_event
+                .listener_builder()
+                .create()
+                .map_err(ExecutorError::iceoryx2)?,
+        );
+
+        // Wire the notifier into the Stoppable so every clone is waker-aware
+        // from the moment the executor is built.
+        let stoppable = Stoppable::with_waker(stop_notifier);
+
         Ok(Executor {
             node,
             pool,
             tasks: Vec::new(),
             running: Arc::new(AtomicBool::new(false)),
-            stoppable: Stoppable::new(),
+            stoppable,
             next_id: AtomicU64::new(0),
+            stop_listener,
         })
     }
 }
@@ -172,11 +234,6 @@ impl Executor {
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(ExecutorError::AlreadyRunning);
         }
-        // Reset stop flag for re-runs.
-        // NOTE: Stoppable handles obtained before run() via stoppable() are
-        // NOT bound to this run's stop flag. Task 9 will re-architect this to
-        // propagate waker-aware Stoppable handles to existing clones.
-        self.stoppable = Stoppable::new();
 
         let result = self.dispatch_loop(&mut mode);
 
@@ -259,6 +316,21 @@ impl Executor {
             }
         }
 
+        // Attach the internal stop listener so the WaitSet wakes when
+        // stop() is called. We hold `self.stop_listener` (Arc) in the Executor
+        // struct which is valid for the lifetime of dispatch_loop. We use the
+        // same raw-pointer-cast pattern as user listeners above.
+        //
+        // SAFETY: `self.stop_listener` is an Arc stored on `self`, which is
+        // exclusively borrowed for the duration of `run_inner` (which calls
+        // `dispatch_loop`). The listener is not freed while the guard is alive
+        // because the Arc keeps it alive and `self` outlives this function.
+        let stop_listener_ref: &IxListener<ipc::Service> =
+            unsafe { &*(self.stop_listener.as_ref() as *const _) };
+        let _stop_guard = waitset
+            .attach_notification(stop_listener_ref)
+            .map_err(ExecutorError::iceoryx2)?;
+
         let iterations_done = AtomicUsize::new(0);
         let stop_flag = self.stoppable.clone();
 
@@ -283,9 +355,20 @@ impl Executor {
             let tasks_ptr = &mut self.tasks as *mut Vec<TaskEntry>;
             let pool = &self.pool;
             let stoppable_inner = self.stoppable.clone();
+            // Raw pointer to the stop listener for draining inside the callback.
+            // SAFETY: same as stop_listener_ref above — the Arc is alive for
+            // the lifetime of dispatch_loop.
+            let stop_listener_ptr = self.stop_listener.as_ref() as *const IxListener<ipc::Service>;
 
             let cb_result = waitset.wait_and_process_once(
                 |attachment_id: WaitSetAttachmentId<ipc::Service>| {
+                    // Drain stop notifications first (no dispatch — the stop_flag
+                    // check after the callback returns handles termination).
+                    // SAFETY: stop_listener_ptr is valid for the duration of the
+                    // closure; the Arc in self.stop_listener keeps it alive.
+                    let stop_l = unsafe { &*stop_listener_ptr };
+                    while let Ok(Some(_)) = stop_l.try_wait_one() {}
+
                     for (i, guard) in guards.iter().enumerate() {
                         let fired = attachment_id.has_event_from(guard)
                             || attachment_id.has_missed_deadline(guard);

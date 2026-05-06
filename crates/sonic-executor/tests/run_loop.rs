@@ -53,12 +53,6 @@ fn run_for_terminates_on_timeout() {
 #[test]
 fn stoppable_terminates_run() {
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    // NOTE: The `stop` handle obtained here via exec.stoppable() is NOT bound
-    // to the run started by exec.run() below, because run_inner resets
-    // self.stoppable = Stoppable::new(). The test works because the item calls
-    // ctx.stop_executor(), which references the *current* Stoppable created
-    // inside run_inner. Task 9 will re-architect the Stoppable to propagate to
-    // existing clones.
     let stop = exec.stoppable();
     exec.add(item_with_triggers(
         |d| {
