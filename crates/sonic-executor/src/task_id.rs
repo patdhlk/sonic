@@ -37,13 +37,19 @@ impl From<String> for TaskId {
 
 impl From<&str> for TaskId {
     fn from(s: &str) -> Self {
-        Self::new(s.to_owned())
+        Self(Arc::from(s))
     }
 }
 
 impl From<&String> for TaskId {
     fn from(s: &String) -> Self {
-        Self::new(s.clone())
+        Self(Arc::from(s.as_str()))
+    }
+}
+
+impl AsRef<str> for TaskId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -59,18 +65,22 @@ mod tests {
     }
 
     #[test]
-    fn clone_is_cheap_and_equal() {
+    fn clone_yields_equal_id() {
         let a = TaskId::new("x");
         let b = a.clone();
         assert_eq!(a, b);
-        // Cloning Arc<str> bumps a refcount; pointer equality is acceptable
-        // but not guaranteed by the API contract.
     }
 
     #[test]
     fn from_various_string_kinds() {
-        let _: TaskId = "lit".into();
-        let _: TaskId = String::from("owned").into();
-        let _: TaskId = (&String::from("ref")).into();
+        let lit: TaskId = "lit".into();
+        assert_eq!(lit.as_str(), "lit");
+
+        let owned: TaskId = String::from("owned").into();
+        assert_eq!(owned.as_str(), "owned");
+
+        let referenced_owned = String::from("ref");
+        let from_ref: TaskId = (&referenced_owned).into();
+        assert_eq!(from_ref.as_str(), "ref");
     }
 }

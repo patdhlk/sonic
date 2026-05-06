@@ -10,7 +10,7 @@ pub type ItemError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutorError {
     /// An iceoryx2 operation failed. The original error is rendered with
-    /// `{:?}` because iceoryx2's error types do not collapse into a single
+    /// `{}` because iceoryx2's error types do not collapse into a single
     /// `From` source.
     #[error("iceoryx2: {0}")]
     Iceoryx2(String),
@@ -50,8 +50,8 @@ pub enum ExecutorError {
 impl ExecutorError {
     /// Convenience constructor for wrapping arbitrary iceoryx2 error values.
     #[must_use]
-    pub fn iceoryx2(err: impl core::fmt::Debug) -> Self {
-        Self::Iceoryx2(format!("{err:?}"))
+    pub fn iceoryx2(err: impl core::fmt::Display) -> Self {
+        Self::Iceoryx2(err.to_string())
     }
 }
 
@@ -72,11 +72,12 @@ mod tests {
     }
 
     #[test]
-    fn iceoryx2_helper_renders_debug() {
-        #[derive(Debug)]
+    fn iceoryx2_helper_renders_display() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("whatever happened")]
         struct Whatever;
         let e = ExecutorError::iceoryx2(Whatever);
         assert!(matches!(e, ExecutorError::Iceoryx2(_)));
-        assert!(format!("{e}").contains("Whatever"));
+        assert!(format!("{e}").contains("whatever happened"));
     }
 }
