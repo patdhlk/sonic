@@ -116,3 +116,23 @@ fn subscriber_trigger_dispatches_task() {
     let _ = stop;
     assert!(counter.load(Ordering::SeqCst) >= 3);
 }
+
+#[test]
+fn threaded_pool_executes_items_correctly() {
+    // Exercises the pool barrier + SendItemPtr discipline. With
+    // worker_threads(2) the run loop dispatches each fired interval
+    // trigger to a pool worker, then barriers before re-attaching.
+    let mut exec = Executor::builder().worker_threads(2).build().unwrap();
+    let counter = Arc::new(AtomicU32::new(0));
+    let c = Arc::clone(&counter);
+
+    exec.add(item_with_triggers(
+        |d| { d.interval(Duration::from_millis(20)); Ok(()) },
+        move |_| { c.fetch_add(1, Ordering::SeqCst); Ok(ControlFlow::Continue) },
+    ))
+    .unwrap();
+
+    exec.run_n(5).unwrap();
+    assert_eq!(counter.load(Ordering::SeqCst), 5,
+        "threaded pool should fire item exactly 5 times under run_n(5)");
+}

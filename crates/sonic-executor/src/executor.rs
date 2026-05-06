@@ -267,12 +267,19 @@ impl Executor {
                 Arc::new(std::sync::Mutex::new(None));
 
             // SAFETY: we capture &mut self.tasks via a raw pointer because
-            // wait_and_process_once expects FnMut and Rust cannot see that
-            // the closure doesn't outlive `self`. We ensure:
-            //   1. The closure runs synchronously within this call.
-            //   2. We call pool.barrier() before returning, so all pool
-            //      workers that dereference item_ptr have completed.
-            //   3. self.tasks is not mutated while the run loop is active.
+            // wait_and_process expects FnMut and Rust can't see the closure
+            // outlives `self`. The discipline that makes this sound:
+            //   1. The closure body on the executor thread is the *only* code that
+            //      reads `tasks_ptr`. The pool jobs it submits hold borrowed
+            //      `*mut dyn ExecutableItem` slices into individual TaskEntries,
+            //      not into the Vec itself, so they don't race with the Vec.
+            //   2. `pool.barrier()` at the end of this callback ensures every
+            //      submitted pool job has completed (and dropped its raw pointer)
+            //      before the callback returns. The next iteration of the WaitSet
+            //      loop is therefore the sole user of `tasks_ptr` again.
+            //   3. The Vec is never resized inside this loop (no `push` / `remove`
+            //      after dispatch starts), so the underlying buffer addresses are
+            //      stable for the lifetime of `dispatch_loop`.
             let tasks_ptr = &mut self.tasks as *mut Vec<TaskEntry>;
             let pool = &self.pool;
             let stoppable_inner = self.stoppable.clone();

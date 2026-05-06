@@ -95,11 +95,10 @@ pub struct Publisher<T: core::fmt::Debug + ZeroCopySend + 'static> {
     notifier: IxNotifier<IpcService>,
 }
 
-// SAFETY: See the safety comment on `Subscriber`. The same reasoning applies:
-// `IxPublisher` and `IxNotifier` use `SingleThreaded` (Rc-based) internally
-// only for intra-process reference counting. The actual publish operations go
-// through shared-memory file descriptors which are thread-safe. Asserting
-// `Send` here allows the publisher to be moved into a spawned thread in tests.
+// SAFETY: same rationale as `Subscriber<T>` above. `IxPublisher` is
+// `!Send` only because of the same `SingleThreaded` Rc; after port
+// creation, `publisher.send_copy(...)` and `publisher.loan_send(...)`
+// don't touch the Rc concurrently. Move-only, no Sync.
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<T: core::fmt::Debug + ZeroCopySend + 'static> Send for Publisher<T> {}
 
@@ -161,16 +160,18 @@ pub struct Subscriber<T: core::fmt::Debug + ZeroCopySend + 'static> {
     listener: Arc<IxListener<IpcService>>,
 }
 
-// SAFETY: `iceoryx2::port::Listener<ipc::Service>` and
-// `iceoryx2::port::Subscriber<ipc::Service, …>` are not automatically `Send`
-// because `ipc::Service` uses `SingleThreaded` (Rc-backed) as its
-// `ArcThreadSafetyPolicy`. The Rc is used only for intra-process reference
-// counting of the port's state; the actual data transport goes through
-// shared-memory file descriptors which are inherently safe to access from
-// multiple OS threads. iceoryx2's own documentation states that all port
-// types may be moved across threads; the missing Send bound is a conservative
-// default of the generic policy. We assert Send here so that subscribers can
-// be moved into declare_triggers closures that must be `Send + 'static`.
+// SAFETY:
+// `IxSubscriber<ipc::Service, T, ()>` is `!Send` because the `ipc::Service`
+// `ArcThreadSafetyPolicy` is `SingleThreaded`, which holds an `Rc<...>`.
+// The Rc is mutated only when methods that call `lock()` on the policy
+// run — primarily during port creation. After construction, the executor
+// only invokes:
+//   * `subscriber.take()` → `IxSubscriber::receive()` (does not touch the
+//     listener's Rc; pure shared-memory read path)
+//   * `subscriber.listener_handle()` → cheap `Arc::clone` (own Arc, not iceoryx2's Rc)
+// No two threads concurrently mutate the same Rc refcount, so moving a
+// `Subscriber` to a pool worker is sound. We do not implement `Sync`;
+// `Subscriber` is move-only across threads, never shared.
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<T: core::fmt::Debug + ZeroCopySend + 'static> Send for Subscriber<T> {}
 
