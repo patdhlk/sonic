@@ -1,0 +1,13 @@
+[package]
+name         = "sonic-executor-tracing"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "tracing-based Observer for sonic-executor."
+
+[dependencies]
+sonic-executor = { path = "../sonic-executor", version = "0.1" }
+tracing        = { workspace = true }

@@ -1,0 +1,5 @@
+/target
+/Cargo.lock
+
+# Process artefacts (specs, brainstorming notes, etc.) — kept locally, not tracked.
+/docs/superpowers/
