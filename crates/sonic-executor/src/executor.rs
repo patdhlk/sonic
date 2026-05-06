@@ -231,6 +231,12 @@ enum RunMode<'a> {
 
 impl Executor {
     fn run_inner(&mut self, mut mode: RunMode<'_>) -> Result<(), ExecutorError> {
+        // NOTE: Once `Stoppable::stop()` has been called, `self.stoppable.is_stopped()`
+        // remains true permanently. Calling `run()` again after a stop will return
+        // promptly without doing any meaningful work (it blocks until the first
+        // trigger fires, then immediately exits the dispatch loop). Task 10's
+        // Runner accommodates this by treating an Executor as one-shot: each
+        // Runner owns the Executor and consumes it.
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(ExecutorError::AlreadyRunning);
         }
