@@ -98,6 +98,30 @@ impl TriggerDeclarer<'_> {
         self
     }
 
+    /// Declare that the item should fire when the server receives a request.
+    pub fn server<Req, Resp>(&mut self, srv: &crate::service::Server<Req, Resp>) -> &mut Self
+    where
+        Req: iceoryx2::prelude::ZeroCopySend + Default + core::fmt::Debug + Copy + 'static,
+        Resp: iceoryx2::prelude::ZeroCopySend + Default + core::fmt::Debug + Copy + 'static,
+    {
+        self.decls.push(TriggerDecl::Subscriber {
+            listener: srv.listener_handle(),
+        });
+        self
+    }
+
+    /// Declare that the item should fire when the client receives a response.
+    pub fn client<Req, Resp>(&mut self, cl: &crate::service::Client<Req, Resp>) -> &mut Self
+    where
+        Req: iceoryx2::prelude::ZeroCopySend + Default + core::fmt::Debug + Copy + 'static,
+        Resp: iceoryx2::prelude::ZeroCopySend + Default + core::fmt::Debug + Copy + 'static,
+    {
+        self.decls.push(TriggerDecl::Subscriber {
+            listener: cl.listener_handle(),
+        });
+        self
+    }
+
     /// Drain the recorded declarations.
     #[doc(hidden)]
     #[allow(dead_code)]
