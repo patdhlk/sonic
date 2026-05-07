@@ -15,7 +15,7 @@ pub type RawListener = IxListener<ipc::Service>;
 
 /// Internal representation of a trigger declaration. Consumed by the executor.
 #[allow(dead_code, clippy::redundant_pub_crate)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum TriggerDecl {
     /// Wake when the listener (paired with a subscriber's channel) fires.
     Subscriber {

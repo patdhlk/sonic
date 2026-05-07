@@ -184,6 +184,16 @@ impl Executor {
     pub const fn iceoryx_node(&self) -> &Node<ipc::Service> {
         &self.node
     }
+
+    /// Begin building a graph. Call `.build()` on the returned builder to
+    /// register the graph as a task.
+    pub fn add_graph(&mut self) -> ExecutorGraphBuilder<'_> {
+        ExecutorGraphBuilder {
+            executor: self,
+            builder: crate::graph::GraphBuilder::new(),
+            custom_id: None,
+        }
+    }
 }
 
 /// Builder for [`Executor`].
@@ -523,6 +533,14 @@ impl Executor {
                                     }
                                 });
                             }
+                            TaskKind::Graph(_) => {
+                                // TODO(Task 14): wire the DAG scheduler here. For now, graph
+                                // dispatch is a no-op so the existing tests still pass without
+                                // graphs accidentally firing.
+                                #[cfg(feature = "tracing")]
+                                tracing::warn!(target: "sonic-executor",
+                                    "graph dispatch is unimplemented in Task 13; it lands in Task 14");
+                            }
                         }
                     }
 
@@ -640,6 +658,56 @@ fn record_first_err(
                 source,
             });
         }
+    }
+}
+
+// ── ExecutorGraphBuilder ──────────────────────────────────────────────────────
+
+/// Borrowed wrapper that finalises a [`GraphBuilder`](crate::graph::GraphBuilder)
+/// into a registered task.
+pub struct ExecutorGraphBuilder<'e> {
+    executor: &'e mut Executor,
+    builder: crate::graph::GraphBuilder,
+    custom_id: Option<TaskId>,
+}
+
+impl ExecutorGraphBuilder<'_> {
+    /// Add a vertex to the graph; returns its handle.
+    pub fn vertex<I: ExecutableItem>(&mut self, item: I) -> crate::graph::Vertex {
+        self.builder.vertex(item)
+    }
+
+    /// Add a directed edge from one vertex to another.
+    pub fn edge(&mut self, from: crate::graph::Vertex, to: crate::graph::Vertex) -> &mut Self {
+        self.builder.edge(from, to);
+        self
+    }
+
+    /// Designate the root vertex (its triggers gate the graph).
+    pub fn root(&mut self, v: crate::graph::Vertex) -> &mut Self {
+        self.builder.root(v);
+        self
+    }
+
+    /// Override the auto-generated id with a custom one.
+    pub fn id(&mut self, id: impl Into<TaskId>) -> &mut Self {
+        self.custom_id = Some(id.into());
+        self
+    }
+
+    /// Validate and register the graph. Returns the task id.
+    pub fn build(self) -> Result<TaskId, ExecutorError> {
+        let g = self.builder.finish()?;
+        let id = self.custom_id.unwrap_or_else(|| {
+            TaskId::new(format!("graph-{}", self.executor.next_id.fetch_add(1, Ordering::SeqCst)))
+        });
+        let decls = g.decls.clone();
+        self.executor.tasks.push(TaskEntry {
+            id: id.clone(),
+            kind: TaskKind::Graph(g),
+            decls,
+        });
+        Ok(id)
     }
 }
 
