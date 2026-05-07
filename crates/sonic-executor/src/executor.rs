@@ -308,6 +308,7 @@ impl ExecutorBuilder {
     /// iceoryx2 service name length limit (this cannot happen under normal use
     /// because the name is derived from the process id and a monotonic counter).
     #[allow(clippy::arc_with_non_send_sync)] // see SAFETY on `impl Send for Executor`
+    #[track_caller]
     pub fn build(self) -> Result<Executor, ExecutorError> {
         let node = NodeBuilder::new()
             .create::<ipc::Service>()

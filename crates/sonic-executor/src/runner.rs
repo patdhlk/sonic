@@ -42,6 +42,7 @@ impl Runner {
     /// happen if a previous holder panicked while holding it — an event that
     /// is not expected under normal use.
     #[allow(clippy::missing_panics_doc)] // unwrap on Mutex::lock; poisoning is unreachable in practice
+    #[track_caller]
     pub fn new(exec: Executor, flags: RunnerFlags) -> Result<Self, ExecutorError> {
         let stop = exec.stoppable();
         let captured_error = Arc::new(Mutex::new(None::<ExecutorError>));

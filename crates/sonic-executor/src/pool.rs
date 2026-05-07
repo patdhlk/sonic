@@ -139,6 +139,7 @@ impl Pool {
 
     /// Submit a job to the pool. In inline mode the job runs immediately on
     /// the calling thread; in threaded mode it is enqueued for a worker.
+    #[track_caller]
     pub(crate) fn submit<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,

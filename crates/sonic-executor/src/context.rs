@@ -59,6 +59,7 @@ impl Stoppable {
 
     /// Request stop. Flips the flag (Release) and, if a waker was bound,
     /// notifies the `WaitSet` so it returns from `wait_and_process` promptly.
+    #[track_caller]
     pub fn stop(&self) {
         self.flag.store(true, Ordering::Release);
         if let Some(w) = &self.waker {
