@@ -74,8 +74,12 @@ enum PoolMode {
 
 impl Pool {
     /// Create a new pool. `n_workers == 0` selects inline mode; any positive
-    /// value spawns that many OS threads.
-    pub(crate) fn new(n_workers: usize) -> Result<Self, ExecutorError> {
+    /// value spawns that many OS threads. `attrs` controls thread names,
+    /// CPU affinity, and scheduling priority.
+    pub(crate) fn new(
+        n_workers: usize,
+        attrs: crate::thread_attrs::ThreadAttributes,
+    ) -> Result<Self, ExecutorError> {
         let tracker = Arc::new(Tracker::default());
         if n_workers == 0 {
             return Ok(Self {
@@ -86,14 +90,30 @@ impl Pool {
 
         let (tx, rx): (Sender<Job>, Receiver<Job>) = bounded(n_workers * 4);
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attrs = Arc::new(attrs);
         let mut handles = Vec::with_capacity(n_workers);
         for i in 0..n_workers {
             let rx = rx.clone();
             let tracker = Arc::clone(&tracker);
             let shutdown = Arc::clone(&shutdown);
+            let attrs = Arc::clone(&attrs);
+            let name = {
+                #[cfg(feature = "thread_attrs")]
+                {
+                    attrs
+                        .name_prefix
+                        .as_ref()
+                        .map_or_else(|| format!("sonic-pool-{i}"), |p| format!("{p}-{i}"))
+                }
+                #[cfg(not(feature = "thread_attrs"))]
+                {
+                    format!("sonic-pool-{i}")
+                }
+            };
             let h = thread::Builder::new()
-                .name(format!("sonic-pool-{i}"))
+                .name(name)
                 .spawn(move || {
+                    attrs.apply_to_self(i);
                     while !shutdown.load(Ordering::Acquire) {
                         match rx.recv() {
                             Ok(job) => {
@@ -160,11 +180,12 @@ impl Drop for Pool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thread_attrs::ThreadAttributes;
     use std::sync::atomic::AtomicU32;
 
     #[test]
     fn inline_pool_runs_synchronously() {
-        let pool = Pool::new(0).unwrap();
+        let pool = Pool::new(0, ThreadAttributes::new()).unwrap();
         let counter = Arc::new(AtomicU32::new(0));
         for _ in 0..10 {
             let c = Arc::clone(&counter);
@@ -178,7 +199,7 @@ mod tests {
 
     #[test]
     fn threaded_pool_runs_concurrently_and_barriers() {
-        let pool = Pool::new(4).unwrap();
+        let pool = Pool::new(4, ThreadAttributes::new()).unwrap();
         let counter = Arc::new(AtomicU32::new(0));
         for _ in 0..100 {
             let c = Arc::clone(&counter);
@@ -193,14 +214,14 @@ mod tests {
 
     #[test]
     fn barrier_with_no_work_returns_immediately() {
-        let pool = Pool::new(2).unwrap();
+        let pool = Pool::new(2, ThreadAttributes::new()).unwrap();
         pool.barrier();
         // No assertion — must not deadlock.
     }
 
     #[test]
     fn submitted_panic_is_caught_and_completion_counted() {
-        let pool = Pool::new(2).unwrap();
+        let pool = Pool::new(2, ThreadAttributes::new()).unwrap();
         pool.submit(|| panic!("kaboom"));
         pool.submit(|| {});
         pool.barrier();

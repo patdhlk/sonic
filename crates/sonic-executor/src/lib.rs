@@ -21,6 +21,7 @@ mod runner;
 mod service;
 mod task_id;
 mod task_kind;
+mod thread_attrs;
 mod trigger;
 
 pub use monitor::ExecutionMonitor;
@@ -38,4 +39,5 @@ pub use graph::{GraphBuilder, Vertex};
 pub use item::{item, item_with_triggers, ExecutableItem, FnItem, FnItemWithTriggers};
 pub use runner::{Runner, RunnerFlags};
 pub use task_id::TaskId;
+pub use thread_attrs::ThreadAttributes;
 pub use trigger::{RawListener, TriggerDeclarer};

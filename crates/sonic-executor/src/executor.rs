@@ -13,6 +13,7 @@ use crate::observer::{NoopObserver, Observer};
 use crate::pool::Pool;
 use crate::task_id::TaskId;
 use crate::task_kind::TaskKind;
+use crate::thread_attrs::ThreadAttributes;
 use crate::trigger::{TriggerDecl, TriggerDeclarer};
 use crate::Channel;
 use iceoryx2::node::Node;
@@ -220,6 +221,7 @@ pub struct ExecutorBuilder {
     worker_threads: Option<usize>,
     observer: Option<Arc<dyn Observer>>,
     monitor: Option<Arc<dyn ExecutionMonitor>>,
+    worker_attrs: ThreadAttributes,
 }
 
 impl ExecutorBuilder {
@@ -245,6 +247,16 @@ impl ExecutorBuilder {
         self
     }
 
+    /// Set thread attributes (name prefix, CPU affinity, scheduling priority)
+    /// for worker threads. Has no effect when `worker_threads` is `0` (inline
+    /// mode). Requires the `thread_attrs` feature for non-default settings.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn worker_attrs(mut self, attrs: ThreadAttributes) -> Self {
+        self.worker_attrs = attrs;
+        self
+    }
+
     /// Build the [`Executor`]. Creates a fresh iceoryx2 node and wires up the
     /// internal stop-event service so that any `Stoppable` clone (taken before
     /// or after `run()`) will wake the `WaitSet` when `stop()` is called.
@@ -263,7 +275,7 @@ impl ExecutorBuilder {
         let n_workers = self
             .worker_threads
             .unwrap_or_else(num_cpus::get_physical);
-        let pool = Arc::new(Pool::new(n_workers)?);
+        let pool = Arc::new(Pool::new(n_workers, self.worker_attrs)?);
 
         // Build the internal stop event service with a unique-per-process name
         // so multiple executors in the same process don't collide.

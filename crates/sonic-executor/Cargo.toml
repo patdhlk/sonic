@@ -26,8 +26,11 @@ proptest = { workspace = true }
 [features]
 default      = ["ctrlc-default"]
 tracing      = ["dep:tracing"]
-thread_attrs = ["dep:core_affinity"]
+thread_attrs = ["dep:core_affinity", "dep:libc"]
 ctrlc-default = ["dep:ctrlc"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [lints.rust]
 unsafe_code = "deny"
