@@ -4,6 +4,7 @@
 //! design rationale.
 #![doc(html_root_url = "https://docs.rs/sonic-executor/0.1.0")]
 
+mod chain;
 mod channel;
 mod context;
 mod control_flow;
@@ -13,6 +14,7 @@ mod item;
 mod pool;
 mod runner;
 mod task_id;
+mod task_kind;
 mod trigger;
 
 pub use channel::{Channel, Publisher, Subscriber, EVENT_SUFFIX};

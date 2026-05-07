@@ -10,6 +10,7 @@ use crate::error::ExecutorError;
 use crate::item::ExecutableItem;
 use crate::pool::Pool;
 use crate::task_id::TaskId;
+use crate::task_kind::TaskKind;
 use crate::trigger::{TriggerDecl, TriggerDeclarer};
 use crate::Channel;
 use iceoryx2::node::Node;
@@ -28,8 +29,8 @@ static EXEC_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct TaskEntry {
     /// Task identifier.
     pub(crate) id: TaskId,
-    /// The executable item itself.
-    pub(crate) item: Box<dyn ExecutableItem>,
+    /// The kind of work this entry holds (single item or chain).
+    pub(crate) kind: TaskKind,
     /// Trigger declarations recorded at `add` time.
     pub(crate) decls: Vec<TriggerDecl>,
 }
@@ -93,7 +94,79 @@ impl Executor {
 
         self.tasks.push(TaskEntry {
             id: id.clone(),
-            item: Box::new(item),
+            kind: TaskKind::Single(Box::new(item)),
+            decls,
+        });
+        Ok(id)
+    }
+
+    /// Add a sequential chain of items. Only the head item's
+    /// `declare_triggers` is consulted; non-head triggers are ignored with a
+    /// tracing warn.
+    pub fn add_chain<I, C>(&mut self, items: C) -> Result<TaskId, ExecutorError>
+    where
+        I: ExecutableItem,
+        C: IntoIterator<Item = I>,
+    {
+        let id = TaskId::new(format!("chain-{}", self.next_id.fetch_add(1, Ordering::SeqCst)));
+        let boxed: Vec<Box<dyn ExecutableItem>> =
+            items.into_iter().map(|i| Box::new(i) as Box<dyn ExecutableItem>).collect();
+        self.add_chain_with_id_boxed(id, boxed)
+    }
+
+    /// Like [`Executor::add_chain`] but with a user-supplied id.
+    pub fn add_chain_with_id<I, C>(
+        &mut self,
+        id: impl Into<TaskId>,
+        items: C,
+    ) -> Result<TaskId, ExecutorError>
+    where
+        I: ExecutableItem,
+        C: IntoIterator<Item = I>,
+    {
+        let boxed: Vec<Box<dyn ExecutableItem>> =
+            items.into_iter().map(|i| Box::new(i) as Box<dyn ExecutableItem>).collect();
+        self.add_chain_with_id_boxed(id.into(), boxed)
+    }
+
+    fn add_chain_with_id_boxed(
+        &mut self,
+        id: TaskId,
+        mut items: Vec<Box<dyn ExecutableItem>>,
+    ) -> Result<TaskId, ExecutorError> {
+        if items.is_empty() {
+            return Err(ExecutorError::Builder(
+                "chain must contain at least one item".into(),
+            ));
+        }
+
+        // Head's triggers gate the chain.
+        let mut head_declarer = TriggerDeclarer::new_internal();
+        items[0].declare_triggers(&mut head_declarer)?;
+        let decls = head_declarer.into_decls();
+
+        // Warn if non-head items declared triggers (those will be ignored).
+        for (i, body) in items.iter_mut().enumerate().skip(1) {
+            let mut spurious = TriggerDeclarer::new_internal();
+            let _ = body.declare_triggers(&mut spurious);
+            if !spurious.is_empty() {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(
+                    target: "sonic-executor",
+                    task = %id,
+                    position = i,
+                    "non-head chain item declared triggers; they will be ignored"
+                );
+                #[cfg(not(feature = "tracing"))]
+                {
+                    let _ = i;
+                }
+            }
+        }
+
+        self.tasks.push(TaskEntry {
+            id: id.clone(),
+            kind: TaskKind::Chain(items),
             decls,
         });
         Ok(id)
@@ -390,55 +463,67 @@ impl Executor {
                         // duration of this closure.
                         let task = unsafe { &mut (&mut *tasks_ptr)[task_idx] };
                         let id = task.id.clone();
-                        // SAFETY: SendItemPtr safety doc above. barrier()
-                        // guarantees exclusive access within each iteration.
-                        let item_ptr =
-                            SendItemPtr::new(task.item.as_mut() as *mut _);
                         let stop = stoppable_inner.clone();
                         let err_slot = Arc::clone(&iter_err);
 
-                        pool.submit(move || {
-                            // item_ptr.get() is a method call — Rust 2021
-                            // per-field capture analysis captures the whole
-                            // SendItemPtr (Send) rather than the inner raw
-                            // pointer field (not Send by default).
-                            let raw = item_ptr.get();
-                            let mut ctx = crate::context::Context::new(&id, &stop);
-                            // SAFETY: pool.barrier() (below) is called
-                            // before we leave the callback scope, so
-                            // the borrow of task.item is bounded to this
-                            // iteration.
-                            #[allow(clippy::option_if_let_else)]
-                            let res: crate::ExecuteResult = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(|| unsafe {
-                                    (*raw).execute(&mut ctx)
-                                }),
-                            )
-                            .unwrap_or_else(|payload| {
-                                let msg =
-                                    if let Some(s) = payload.downcast_ref::<&str>() {
-                                        (*s).to_string()
-                                    } else if let Some(s) =
-                                        payload.downcast_ref::<String>()
-                                    {
-                                        s.clone()
-                                    } else {
-                                        "panicked task".to_string()
-                                    };
-                                Err::<crate::ControlFlow, crate::ItemError>(Box::new(
-                                    PanickedTask(msg),
-                                ))
-                            });
-                            if let Err(source) = res {
-                                let mut slot = err_slot.lock().unwrap();
-                                if slot.is_none() {
-                                    *slot = Some(ExecutorError::Item {
-                                        task_id: id,
-                                        source,
-                                    });
-                                }
+                        match &mut task.kind {
+                            TaskKind::Single(item_box) => {
+                                // SAFETY: SendItemPtr safety doc above. barrier()
+                                // guarantees exclusive access within each iteration.
+                                let item_ptr =
+                                    SendItemPtr::new(item_box.as_mut() as *mut _);
+                                pool.submit(move || {
+                                    let mut ctx =
+                                        crate::context::Context::new(&id, &stop);
+                                    // item_ptr.get() is a method call — Rust 2021
+                                    // per-field capture analysis captures the whole
+                                    // SendItemPtr (Send) rather than the inner raw
+                                    // pointer field (not Send by default).
+                                    let raw = item_ptr.get();
+                                    // SAFETY: pool.barrier() (below) is called
+                                    // before we leave the callback scope, so
+                                    // the borrow of item_box is bounded to this
+                                    // iteration.
+                                    let res = run_item_catch_unwind(
+                                        unsafe { &mut *raw },
+                                        &mut ctx,
+                                    );
+                                    record_first_err(&err_slot, &id, res);
+                                });
                             }
-                        });
+                            TaskKind::Chain(items) => {
+                                let item_ptrs: Vec<SendItemPtr> = items
+                                    .iter_mut()
+                                    .map(|b| SendItemPtr::new(b.as_mut() as *mut _))
+                                    .collect();
+                                pool.submit(move || {
+                                    let mut ctx =
+                                        crate::context::Context::new(&id, &stop);
+                                    for ptr in item_ptrs {
+                                        // SAFETY: pool.barrier() (below) is called
+                                        // before we leave the callback scope, so
+                                        // the borrows are bounded to this iteration.
+                                        let raw = ptr.get();
+                                        let res = run_item_catch_unwind(
+                                            unsafe { &mut *raw },
+                                            &mut ctx,
+                                        );
+                                        match res {
+                                            Ok(crate::ControlFlow::Continue) => {}
+                                            Ok(crate::ControlFlow::StopChain) => break,
+                                            Err(_) => {
+                                                record_first_err(
+                                                    &err_slot,
+                                                    &id,
+                                                    res,
+                                                );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }
                     }
 
                     // Wait for all submitted jobs to finish before leaving
@@ -521,6 +606,42 @@ impl core::fmt::Display for PanickedTask {
 }
 
 impl std::error::Error for PanickedTask {}
+
+/// Execute `item` inside `catch_unwind`, converting any panic into an `Err`.
+#[allow(clippy::option_if_let_else)]
+fn run_item_catch_unwind(
+    item: &mut dyn ExecutableItem,
+    ctx: &mut crate::context::Context<'_>,
+) -> crate::ExecuteResult {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| item.execute(ctx)))
+        .unwrap_or_else(|payload| {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "panicked task".to_string()
+            };
+            Err::<crate::ControlFlow, crate::ItemError>(Box::new(PanickedTask(msg)))
+        })
+}
+
+/// Record the first error into `slot`. Subsequent errors are silently dropped.
+fn record_first_err(
+    slot: &Arc<std::sync::Mutex<Option<ExecutorError>>>,
+    id: &TaskId,
+    res: crate::ExecuteResult,
+) {
+    if let Err(source) = res {
+        let mut g = slot.lock().unwrap();
+        if g.is_none() {
+            *g = Some(ExecutorError::Item {
+                task_id: id.clone(),
+                source,
+            });
+        }
+    }
+}
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 

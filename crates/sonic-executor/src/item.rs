@@ -41,6 +41,35 @@ pub trait ExecutableItem: Send + 'static {
     }
 }
 
+// ── Blanket impl for boxed trait objects ─────────────────────────────────────
+
+/// Allows `Vec<Box<dyn ExecutableItem>>` to be passed directly to
+/// [`Executor::add_chain`] without a secondary wrapper.
+impl ExecutableItem for Box<dyn ExecutableItem> {
+    fn declare_triggers(
+        &mut self,
+        d: &mut TriggerDeclarer<'_>,
+    ) -> Result<(), ExecutorError> {
+        (**self).declare_triggers(d)
+    }
+
+    fn execute(&mut self, ctx: &mut Context<'_>) -> ExecuteResult {
+        (**self).execute(ctx)
+    }
+
+    fn task_id(&self) -> Option<&str> {
+        (**self).task_id()
+    }
+
+    fn app_id(&self) -> Option<u32> {
+        (**self).app_id()
+    }
+
+    fn app_instance_id(&self) -> Option<u32> {
+        (**self).app_instance_id()
+    }
+}
+
 // ── Closure adapter ────────────────────────────────────────────────────────
 
 /// Adapter turning a closure into an [`ExecutableItem`] with no triggers
