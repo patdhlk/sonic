@@ -7,6 +7,7 @@
 mod chain;
 mod channel;
 mod condition;
+pub mod signal_slot;
 mod context;
 mod control_flow;
 mod error;
