@@ -11,3 +11,6 @@ description  = "tracing-based Observer for sonic-executor."
 [dependencies]
 sonic-executor = { path = "../sonic-executor", version = "0.1" }
 tracing        = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
