@@ -72,6 +72,18 @@ impl Executor {
         Channel::open_or_create(&self.node, name)
     }
 
+    /// Open or create a request/response service bound to this executor's node.
+    pub fn service<Req, Resp>(
+        &mut self,
+        name: &str,
+    ) -> Result<Arc<crate::Service<Req, Resp>>, ExecutorError>
+    where
+        Req: ZeroCopySend + Default + core::fmt::Debug + 'static,
+        Resp: ZeroCopySend + Default + core::fmt::Debug + 'static,
+    {
+        crate::Service::open_or_create(&self.node, name)
+    }
+
     /// Add an item to the executor with an auto-generated id.
     pub fn add(
         &mut self,
