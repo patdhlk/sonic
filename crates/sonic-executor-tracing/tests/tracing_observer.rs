@@ -26,11 +26,7 @@ fn tracing_observer_runs_without_panic() {
                 Ok(())
             },
             |ctx| {
-                ctx.send_event(UserEvent {
-                    kind: 1,
-                    int_data: 7,
-                    string_data: Some("hi".into()),
-                });
+                ctx.send_event(UserEvent::new(1, 7).with_string("hi"));
                 Ok(ControlFlow::Continue)
             },
         ))

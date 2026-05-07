@@ -4,6 +4,7 @@ use crate::error::ItemError;
 
 /// What the executor should do after an item runs successfully.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ControlFlow {
     /// Continue scheduling normally.
     Continue,

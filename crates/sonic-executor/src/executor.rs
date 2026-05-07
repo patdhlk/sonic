@@ -704,6 +704,9 @@ impl Executor {
                                         match res {
                                             Ok(crate::ControlFlow::Continue) => {}
                                             Ok(crate::ControlFlow::StopChain) => break,
+                                            // Future unknown `ControlFlow` variants are treated
+                                            // as `Continue` — the safest default.
+                                            Ok(_) => {}
                                             Err(_) => {
                                                 record_first_err(&err_slot, &id, res);
                                                 break;

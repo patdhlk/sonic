@@ -5,6 +5,7 @@
 mod inner {
     /// Builder-style thread-tuning bag.
     #[derive(Clone, Debug, Default)]
+    #[non_exhaustive]
     pub struct ThreadAttributes {
         pub(crate) name_prefix: Option<String>,
         pub(crate) affinity_mask: Option<Vec<usize>>,

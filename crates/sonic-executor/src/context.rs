@@ -83,11 +83,11 @@ impl core::fmt::Debug for Stoppable {
 }
 
 /// Per-invocation context. Borrowed view; not stored across calls.
+#[non_exhaustive]
 pub struct Context<'a> {
     task_id: &'a TaskId,
     stop: &'a Stoppable,
     observer: &'a dyn Observer,
-    _private: (),
 }
 
 impl<'a> Context<'a> {
@@ -98,7 +98,6 @@ impl<'a> Context<'a> {
             task_id,
             stop,
             observer,
-            _private: (),
         }
     }
 

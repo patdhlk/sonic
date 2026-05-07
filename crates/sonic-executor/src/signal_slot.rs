@@ -17,6 +17,7 @@ type AfterRecvCb<T> = Option<Box<dyn FnMut(&T) -> bool + Send + 'static>>;
 
 /// How many messages a slot consumes per `execute`.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[non_exhaustive]
 pub enum TakePolicy {
     /// Take exactly one message; if none is available, return `StopChain`.
     Single,

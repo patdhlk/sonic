@@ -8,6 +8,7 @@ pub type ItemError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Top-level error type for the executor.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum ExecutorError {
     /// An iceoryx2 operation failed. The original error is rendered with
     /// `{}` because iceoryx2's error types do not collapse into a single

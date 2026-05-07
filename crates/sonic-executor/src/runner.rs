@@ -135,6 +135,9 @@ fn clone_executor_error(e: &ExecutorError) -> ExecutorError {
         ExecutorError::AlreadyRunning => ExecutorError::AlreadyRunning,
         ExecutorError::RunnerJoin => ExecutorError::RunnerJoin,
         ExecutorError::Builder(s) => ExecutorError::Builder(s.clone()),
+        // Future-proof catch-all: any variant added later is summarised as a
+        // Builder error string so the runner thread can still surface it.
+        _ => ExecutorError::Builder(format!("unknown variant: {e}")),
     }
 }
 

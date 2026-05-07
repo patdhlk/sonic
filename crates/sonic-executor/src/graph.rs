@@ -354,6 +354,9 @@ impl Graph {
                             runtime.stop_chain_seen.store(true, Ordering::Release);
                             runtime.stop_flag.store(true, Ordering::Release);
                         }
+                        // Future unknown `ControlFlow` variants are treated as
+                        // `Continue` — the safest default for graph dispatch.
+                        Ok(_) => {}
                         Err(_) => runtime.stop_flag.store(true, Ordering::Release),
                     }
                     if let Err(e) = res {

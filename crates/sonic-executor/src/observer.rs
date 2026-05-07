@@ -4,7 +4,13 @@ use crate::error::ExecutorError;
 use crate::task_id::TaskId;
 
 /// Generic user event carried by [`Observer::on_send_event`].
+///
+/// # Construction
+///
+/// Use [`UserEvent::new`] to create a value; struct literal syntax is not
+/// available from outside this crate because `UserEvent` is `#[non_exhaustive]`.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct UserEvent {
     /// User-defined event kind.
     pub kind: u32,
@@ -12,6 +18,25 @@ pub struct UserEvent {
     pub int_data: i64,
     /// Optional string payload.
     pub string_data: Option<String>,
+}
+
+impl UserEvent {
+    /// Create a new event with the given `kind` and `int_data`.
+    #[must_use]
+    pub fn new(kind: u32, int_data: i64) -> Self {
+        Self {
+            kind,
+            int_data,
+            string_data: None,
+        }
+    }
+
+    /// Attach an optional string payload to this event.
+    #[must_use]
+    pub fn with_string(mut self, s: impl Into<String>) -> Self {
+        self.string_data = Some(s.into());
+        self
+    }
 }
 
 /// Lifecycle observer invoked by the executor at well-defined points.

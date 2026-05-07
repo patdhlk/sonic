@@ -47,11 +47,7 @@ impl sonic_executor::ExecutableItem for AppItem {
         Ok(())
     }
     fn execute(&mut self, ctx: &mut sonic_executor::Context<'_>) -> sonic_executor::ExecuteResult {
-        ctx.send_event(UserEvent {
-            kind: 1,
-            int_data: 42,
-            string_data: None,
-        });
+        ctx.send_event(UserEvent::new(1, 42));
         Ok(ControlFlow::Continue)
     }
     fn app_id(&self) -> Option<u32> {
