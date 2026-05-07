@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor, Observer, UserEvent};
+use sonic_executor::{ControlFlow, Executor, Observer, UserEvent, item_with_triggers};
 use sonic_executor_tracing::TracingObserver;
 use std::sync::Arc;
 

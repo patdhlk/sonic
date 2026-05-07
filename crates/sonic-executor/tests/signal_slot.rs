@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, signal_slot, ControlFlow, Executor};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers, signal_slot};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 

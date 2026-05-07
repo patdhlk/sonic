@@ -2,8 +2,8 @@
 //! the [`TriggerDeclarer`]; the executor turns the recorded declarations into
 //! `WaitSet` attachments at add-time.
 
-use crate::payload::Payload;
 use crate::Subscriber;
+use crate::payload::Payload;
 use core::time::Duration;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::prelude::ipc;
@@ -62,10 +62,7 @@ impl TriggerDeclarer<'_> {
     }
 
     /// Declare that the item should fire when the given subscriber receives.
-    pub fn subscriber<T: Payload>(
-        &mut self,
-        sub: &Subscriber<T>,
-    ) -> &mut Self {
+    pub fn subscriber<T: Payload>(&mut self, sub: &Subscriber<T>) -> &mut Self {
         self.decls.push(TriggerDecl::Subscriber {
             listener: sub.listener_handle(),
         });

@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 use core::time::Duration;
 use iceoryx2::prelude::*;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor, ExecutorError, TriggerDeclarer};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use sonic_executor::{ControlFlow, Executor, ExecutorError, TriggerDeclarer, item_with_triggers};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -154,10 +154,7 @@ fn item_task_id_override_takes_precedence() {
 
     struct NamedItem;
     impl sonic_executor::ExecutableItem for NamedItem {
-        fn declare_triggers(
-            &mut self,
-            d: &mut TriggerDeclarer<'_>,
-        ) -> Result<(), ExecutorError> {
+        fn declare_triggers(&mut self, d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
             d.interval(Duration::from_millis(20));
             Ok(())
         }

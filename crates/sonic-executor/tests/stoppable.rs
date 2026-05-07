@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers};
 use std::time::Instant;
 
 /// Verify that a `Stoppable` clone obtained *before* `run()` is waker-aware

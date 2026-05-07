@@ -13,7 +13,7 @@ use iceoryx2::prelude::ZeroCopySend;
 /// `ZeroCopySend + Default + Debug + 'static`.
 #[diagnostic::on_unimplemented(
     note = "`{Self}` must derive `ZeroCopySend`, `Debug`, and `Default`.",
-    note = "Add `#[derive(Debug, Default, ZeroCopySend)] #[repr(C)]` and the trait will be implemented automatically.",
+    note = "Add `#[derive(Debug, Default, ZeroCopySend)] #[repr(C)]` and the trait will be implemented automatically."
 )]
 pub trait Payload: ZeroCopySend + Default + core::fmt::Debug + 'static {}
 

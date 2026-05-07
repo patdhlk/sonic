@@ -1,7 +1,7 @@
 //! Print "tick" once a second until Ctrl-C.
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut exec = Executor::builder().worker_threads(0).build()?;

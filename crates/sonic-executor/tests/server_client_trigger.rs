@@ -2,9 +2,9 @@
 
 use core::time::Duration;
 use iceoryx2::prelude::*;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 

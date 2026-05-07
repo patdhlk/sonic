@@ -2,7 +2,7 @@
 #![cfg(feature = "thread_attrs")]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor, ThreadAttributes};
+use sonic_executor::{ControlFlow, Executor, ThreadAttributes, item_with_triggers};
 
 #[test]
 fn worker_attrs_compiles_and_runs() {

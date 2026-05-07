@@ -71,10 +71,11 @@ fn observer_sees_lifecycle_and_user_events() {
     assert_eq!(obs.down.load(Ordering::SeqCst), 1);
     assert!(obs.start.load(Ordering::SeqCst) >= 1);
     assert!(obs.stop.load(Ordering::SeqCst) >= 1);
-    assert!(obs
-        .user_events
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|e| e.int_data == 42));
+    assert!(
+        obs.user_events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.int_data == 42)
+    );
 }

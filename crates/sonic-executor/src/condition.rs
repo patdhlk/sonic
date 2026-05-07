@@ -60,9 +60,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ControlFlow;
     use crate::context::ContextHarness;
     use crate::item::item;
-    use crate::ControlFlow;
 
     #[test]
     fn condition_true_runs_inner() {

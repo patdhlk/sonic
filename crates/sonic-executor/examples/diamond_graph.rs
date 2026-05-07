@@ -1,7 +1,7 @@
 //! Diamond DAG with the root triggered every 500ms.
 
 use core::time::Duration;
-use sonic_executor::{item, item_with_triggers, ControlFlow, Executor};
+use sonic_executor::{ControlFlow, Executor, item, item_with_triggers};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut exec = Executor::builder().worker_threads(4).build()?;

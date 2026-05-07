@@ -3,7 +3,7 @@
 
 use core::time::Duration;
 use iceoryx2::prelude::*;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers};
 
 #[derive(Debug, Default, Clone, Copy, ZeroCopySend)]
 #[repr(C)]

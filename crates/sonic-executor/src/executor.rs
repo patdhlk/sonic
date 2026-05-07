@@ -5,6 +5,7 @@
 // pub(crate) inside a private module — intentional, Task 8+ will use them.
 #![allow(clippy::redundant_pub_crate)]
 
+use crate::Channel;
 use crate::context::Stoppable;
 use crate::error::ExecutorError;
 use crate::item::ExecutableItem;
@@ -17,13 +18,12 @@ use crate::task_id::TaskId;
 use crate::task_kind::TaskKind;
 use crate::thread_attrs::ThreadAttributes;
 use crate::trigger::{TriggerDecl, TriggerDeclarer};
-use crate::Channel;
 use iceoryx2::node::Node;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::prelude::ipc;
 use iceoryx2::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Monotonically increasing counter so multiple executors in the same process
@@ -74,10 +74,7 @@ impl Executor {
     }
 
     /// Open or create a pub/sub channel bound to this executor's node.
-    pub fn channel<T: Payload>(
-        &mut self,
-        name: &str,
-    ) -> Result<Arc<Channel<T>>, ExecutorError> {
+    pub fn channel<T: Payload>(&mut self, name: &str) -> Result<Arc<Channel<T>>, ExecutorError> {
         Channel::open_or_create(&self.node, name)
     }
 
@@ -930,7 +927,7 @@ impl ExecutorGraphBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{item, ControlFlow};
+    use crate::{ControlFlow, item};
 
     #[test]
     fn add_returns_unique_ids() {

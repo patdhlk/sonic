@@ -8,7 +8,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::error::ExecutorError;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};

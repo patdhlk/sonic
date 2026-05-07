@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, ExecutionMonitor, Executor, TaskId};
+use sonic_executor::{ControlFlow, ExecutionMonitor, Executor, TaskId, item_with_triggers};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

@@ -4,8 +4,8 @@ use crate::observer::{Observer, UserEvent};
 use crate::task_id::TaskId;
 use iceoryx2::port::notifier::Notifier as IxNotifier;
 use iceoryx2::prelude::ipc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Shared stop flag passed via [`Context::stoppable`].
 ///

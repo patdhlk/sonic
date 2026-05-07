@@ -427,7 +427,7 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{item, ControlFlow};
+    use crate::{ControlFlow, item};
 
     #[test]
     fn empty_graph_rejected() {

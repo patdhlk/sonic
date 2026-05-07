@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor, Runner, RunnerFlags};
-use std::sync::atomic::{AtomicU32, Ordering};
+use sonic_executor::{ControlFlow, Executor, Runner, RunnerFlags, item_with_triggers};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]
 fn runner_runs_until_stop() {

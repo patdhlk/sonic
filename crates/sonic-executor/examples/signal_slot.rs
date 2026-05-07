@@ -1,7 +1,7 @@
 //! Signal/slot pair triggered on an interval.
 
 use core::time::Duration;
-use sonic_executor::{item_with_triggers, signal_slot, ControlFlow, Executor};
+use sonic_executor::{ControlFlow, Executor, item_with_triggers, signal_slot};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut exec = Executor::builder().worker_threads(2).build()?;

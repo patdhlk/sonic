@@ -23,7 +23,7 @@ pub struct UserEvent {
 impl UserEvent {
     /// Create a new event with the given `kind` and `int_data`.
     #[must_use]
-    pub fn new(kind: u32, int_data: i64) -> Self {
+    pub const fn new(kind: u32, int_data: i64) -> Self {
         Self {
             kind,
             int_data,

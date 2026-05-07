@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use core::time::Duration;
-use sonic_executor::{item, item_with_triggers, ControlFlow, Executor};
-use std::sync::atomic::{AtomicU32, Ordering};
+use sonic_executor::{ControlFlow, Executor, item, item_with_triggers};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]
 fn chain_runs_items_in_order() {
