@@ -6,6 +6,7 @@
 
 mod chain;
 mod channel;
+mod condition;
 mod context;
 mod control_flow;
 mod error;
@@ -18,6 +19,7 @@ mod task_kind;
 mod trigger;
 
 pub use channel::{Channel, Publisher, Subscriber, EVENT_SUFFIX};
+pub use condition::{wrap_with_condition, Conditional};
 pub use context::{Context, Stoppable};
 pub use control_flow::{ControlFlow, ExecuteResult};
 pub use error::{ExecutorError, ItemError};
