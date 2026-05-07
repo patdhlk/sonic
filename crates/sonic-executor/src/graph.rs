@@ -30,6 +30,13 @@ impl core::fmt::Debug for Graph {
     }
 }
 
+impl Graph {
+    /// Return the root vertex's `task_id()` override, if any.
+    pub(crate) fn root_task_id(&self) -> Option<&str> {
+        self.items[self.root].task_id()
+    }
+}
+
 /// Builder for a graph.
 pub struct GraphBuilder {
     items: Vec<Box<dyn ExecutableItem>>,

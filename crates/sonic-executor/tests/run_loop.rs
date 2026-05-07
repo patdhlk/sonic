@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 use core::time::Duration;
 use iceoryx2::prelude::*;
-use sonic_executor::{item_with_triggers, ControlFlow, Executor};
+use sonic_executor::{item_with_triggers, ControlFlow, Executor, ExecutorError, TriggerDeclarer};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -146,4 +146,36 @@ fn threaded_pool_executes_items_correctly() {
         5,
         "threaded pool should fire item exactly 5 times under run_n(5)"
     );
+}
+
+#[test]
+fn item_task_id_override_takes_precedence() {
+    use sonic_executor::{Context, ExecuteResult};
+
+    struct NamedItem;
+    impl sonic_executor::ExecutableItem for NamedItem {
+        fn declare_triggers(
+            &mut self,
+            d: &mut TriggerDeclarer<'_>,
+        ) -> Result<(), ExecutorError> {
+            d.interval(Duration::from_millis(20));
+            Ok(())
+        }
+        fn execute(&mut self, ctx: &mut Context<'_>) -> ExecuteResult {
+            ctx.stop_executor();
+            Ok(ControlFlow::Continue)
+        }
+        fn task_id(&self) -> Option<&str> {
+            Some("custom-from-item")
+        }
+    }
+
+    let mut exec = Executor::builder().worker_threads(0).build().unwrap();
+    let id = exec.add_with_id("user-supplied-id", NamedItem).unwrap();
+    assert_eq!(
+        id.as_str(),
+        "custom-from-item",
+        "ExecutableItem::task_id() override should win over user-supplied id"
+    );
+    exec.run().unwrap();
 }

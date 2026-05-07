@@ -102,12 +102,18 @@ impl Executor {
     }
 
     /// Add an item with a user-supplied id.
+    ///
+    /// The item's [`ExecutableItem::task_id`] override takes precedence over
+    /// the caller-supplied `id`, which itself takes precedence over the
+    /// auto-generated id assigned by [`Executor::add`].
     pub fn add_with_id(
         &mut self,
         id: impl Into<TaskId>,
         mut item: impl ExecutableItem,
     ) -> Result<TaskId, ExecutorError> {
-        let id: TaskId = id.into();
+        let id_arg: TaskId = id.into();
+        // The item's `task_id()` override wins over the user-supplied id.
+        let id = item.task_id().map(TaskId::new).unwrap_or(id_arg);
         let mut declarer = TriggerDeclarer::new_internal();
         item.declare_triggers(&mut declarer)?;
         let decls = declarer.into_decls();
@@ -166,6 +172,9 @@ impl Executor {
                 "chain must contain at least one item".into(),
             ));
         }
+
+        // Head item's `task_id()` override wins over the user-supplied id.
+        let id = items[0].task_id().map(TaskId::new).unwrap_or(id);
 
         // Head's triggers gate the chain.
         let mut head_declarer = TriggerDeclarer::new_internal();
@@ -833,14 +842,25 @@ impl ExecutorGraphBuilder<'_> {
     }
 
     /// Validate and register the graph. Returns the task id.
+    ///
+    /// The root vertex's [`ExecutableItem::task_id`] override takes precedence
+    /// over any id set via [`ExecutorGraphBuilder::id`], which itself takes
+    /// precedence over the auto-generated id.
     pub fn build(self) -> Result<TaskId, ExecutorError> {
         let g = self.builder.finish()?;
-        let id = self.custom_id.unwrap_or_else(|| {
+        // Root vertex's task_id() override wins over the custom id, which wins
+        // over the auto-generated fallback.
+        let auto_id = || {
             TaskId::new(format!(
                 "graph-{}",
                 self.executor.next_id.fetch_add(1, Ordering::SeqCst)
             ))
-        });
+        };
+        let id = g
+            .root_task_id()
+            .map(TaskId::new)
+            .or(self.custom_id)
+            .unwrap_or_else(auto_id);
         let decls = g.decls.clone();
         self.executor.tasks.push(TaskEntry {
             id: id.clone(),
