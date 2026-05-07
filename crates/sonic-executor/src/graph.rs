@@ -154,6 +154,7 @@ impl GraphBuilder {
 // ── Graph scheduler (Task 14) ─────────────────────────────────────────────────
 
 use crate::context::Stoppable;
+use crate::monitor::ExecutionMonitor;
 use crate::observer::Observer;
 use crate::pool::Pool;
 use crate::task_id::TaskId;
@@ -193,6 +194,7 @@ struct GraphRuntime {
     stop_chain_seen: AtomicBool,
     done_cv: (Mutex<()>, Condvar),
     observer: Arc<dyn Observer>,
+    monitor: Arc<dyn ExecutionMonitor>,
 }
 
 impl GraphRuntime {
@@ -247,6 +249,7 @@ impl Graph {
         task_id: &TaskId,
         stop: &Stoppable,
         observer: &Arc<dyn Observer>,
+        monitor: &Arc<dyn ExecutionMonitor>,
     ) -> GraphRunOutcome {
         let n = self.items.len();
         let counters: Vec<AtomicUsize> = self
@@ -265,6 +268,7 @@ impl Graph {
             stop_chain_seen: AtomicBool::new(false),
             done_cv: (Mutex::new(()), Condvar::new()),
             observer: Arc::clone(observer),
+            monitor: Arc::clone(monitor),
         });
 
         // Re-dispatch channel: completed vertex closures push successors
@@ -297,6 +301,8 @@ impl Graph {
                     if let Some(aid) = app_id {
                         runtime.observer.on_app_start(task_id.clone(), aid, app_inst);
                     }
+                    let started = std::time::Instant::now();
+                    runtime.monitor.pre_execute(task_id.clone(), started);
                     let res = crate::executor::run_item_catch_unwind_external(
                         // SAFETY: VertexPtr is stable for the duration of run_once
                         // (the Box is not moved). In-degree counters guarantee at
@@ -304,6 +310,8 @@ impl Graph {
                         unsafe { &mut *ptr },
                         &mut ctx,
                     );
+                    let took = started.elapsed();
+                    runtime.monitor.post_execute(task_id.clone(), started, took, res.is_ok());
                     if let Err(ref e) = res {
                         runtime.observer.on_app_error(task_id.clone(), e.as_ref());
                     }

@@ -8,6 +8,7 @@
 use crate::context::Stoppable;
 use crate::error::ExecutorError;
 use crate::item::ExecutableItem;
+use crate::monitor::{ExecutionMonitor, NoopMonitor};
 use crate::observer::{NoopObserver, Observer};
 use crate::pool::Pool;
 use crate::task_id::TaskId;
@@ -50,6 +51,8 @@ pub struct Executor {
     pub(crate) stop_listener: Arc<IxListener<ipc::Service>>,
     /// Lifecycle observer. Defaults to a no-op.
     pub(crate) observer: Arc<dyn Observer>,
+    /// Execution monitor. Defaults to a no-op.
+    pub(crate) monitor: Arc<dyn ExecutionMonitor>,
 }
 
 // SAFETY: `IxListener<ipc::Service>` is `!Send` for the same Rc-based
@@ -216,6 +219,7 @@ impl Executor {
 pub struct ExecutorBuilder {
     worker_threads: Option<usize>,
     observer: Option<Arc<dyn Observer>>,
+    monitor: Option<Arc<dyn ExecutionMonitor>>,
 }
 
 impl ExecutorBuilder {
@@ -231,6 +235,13 @@ impl ExecutorBuilder {
     #[must_use]
     pub fn observer(mut self, obs: Arc<dyn Observer>) -> Self {
         self.observer = Some(obs);
+        self
+    }
+
+    /// Attach an execution monitor. If not called, a no-op monitor is used.
+    #[must_use]
+    pub fn monitor(mut self, mon: Arc<dyn ExecutionMonitor>) -> Self {
+        self.monitor = Some(mon);
         self
     }
 
@@ -290,6 +301,9 @@ impl ExecutorBuilder {
         let observer: Arc<dyn Observer> =
             self.observer.unwrap_or_else(|| Arc::new(NoopObserver));
 
+        let monitor: Arc<dyn ExecutionMonitor> =
+            self.monitor.unwrap_or_else(|| Arc::new(NoopMonitor));
+
         Ok(Executor {
             node,
             pool,
@@ -299,6 +313,7 @@ impl ExecutorBuilder {
             next_id: AtomicU64::new(0),
             stop_listener,
             observer,
+            monitor,
         })
     }
 }
@@ -477,6 +492,7 @@ impl Executor {
             let pool = &self.pool;
             let stoppable_inner = self.stoppable.clone();
             let observer_inner = Arc::clone(&self.observer);
+            let monitor_inner = Arc::clone(&self.monitor);
             // Raw pointer to the stop listener for draining inside the callback.
             // SAFETY: same as stop_listener_ref above — the Arc is alive for
             // the lifetime of dispatch_loop.
@@ -509,6 +525,7 @@ impl Executor {
                         let stop = stoppable_inner.clone();
                         let err_slot = Arc::clone(&iter_err);
                         let obs = Arc::clone(&observer_inner);
+                        let mon = Arc::clone(&monitor_inner);
 
                         match &mut task.kind {
                             TaskKind::Single(item_box) => {
@@ -534,10 +551,14 @@ impl Executor {
                                     // before we leave the callback scope, so
                                     // the borrow of item_box is bounded to this
                                     // iteration.
+                                    let started = std::time::Instant::now();
+                                    mon.pre_execute(id.clone(), started);
                                     let res = run_item_catch_unwind(
                                         unsafe { &mut *raw },
                                         &mut ctx,
                                     );
+                                    let took = started.elapsed();
+                                    mon.post_execute(id.clone(), started, took, res.is_ok());
                                     if let Err(ref e) = res {
                                         obs.on_app_error(id.clone(), e.as_ref());
                                     }
@@ -568,10 +589,14 @@ impl Executor {
                                         // before we leave the callback scope, so
                                         // the borrows are bounded to this iteration.
                                         let raw = ptr.get();
+                                        let started = std::time::Instant::now();
+                                        mon.pre_execute(id.clone(), started);
                                         let res = run_item_catch_unwind(
                                             unsafe { &mut *raw },
                                             &mut ctx,
                                         );
+                                        let took = started.elapsed();
+                                        mon.post_execute(id.clone(), started, took, res.is_ok());
                                         if let Err(ref e) = res {
                                             obs.on_app_error(id.clone(), e.as_ref());
                                         }
@@ -598,7 +623,7 @@ impl Executor {
                                 // pool. This avoids deadlock when worker_threads == 1 because
                                 // the WaitSet thread is NOT a pool worker.
                                 let pool_arc = Arc::clone(pool);
-                                let outcome = graph.run_once(&pool_arc, &id, &stop, &obs);
+                                let outcome = graph.run_once(&pool_arc, &id, &stop, &obs, &mon);
                                 if let Some(source) = outcome.error {
                                     let mut g = err_slot.lock().unwrap();
                                     if g.is_none() {
