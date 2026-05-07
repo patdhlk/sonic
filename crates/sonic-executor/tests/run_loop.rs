@@ -2,8 +2,15 @@
 use core::time::Duration;
 use iceoryx2::prelude::*;
 use sonic_executor::{item_with_triggers, ControlFlow, Executor};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn unique(prefix: &str) -> String {
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}.{}.{n}", std::process::id())
+}
 
 #[test]
 fn interval_trigger_fires_run_n_times() {
@@ -76,7 +83,8 @@ struct Tick(u64);
 #[test]
 fn subscriber_trigger_dispatches_task() {
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    let ch = exec.channel::<Tick>("sonic.test.run.sub").unwrap();
+    let topic = unique("sonic.test.run.sub");
+    let ch = exec.channel::<Tick>(&topic).unwrap();
     let publisher = ch.publisher().unwrap();
     let subscriber = ch.subscriber().unwrap();
 

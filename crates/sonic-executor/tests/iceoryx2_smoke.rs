@@ -6,6 +6,13 @@
 use core::time::Duration;
 use iceoryx2::prelude::*;
 
+static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn unique(prefix: &str) -> String {
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}.{}.{n}", std::process::id())
+}
+
 #[derive(Debug, Default, Clone, Copy, ZeroCopySend)]
 #[repr(C)]
 struct Tick(u64);
@@ -17,8 +24,11 @@ fn pubsub_event_waitset_round_trip() {
         .expect("create node");
 
     // Publish-subscribe service.
+    let pubsub_name = unique("sonic.smoke.tick");
+    let event_name = format!("{pubsub_name}.__sonic_event");
+
     let pubsub = node
-        .service_builder(&"sonic.smoke.tick".try_into().unwrap())
+        .service_builder(&pubsub_name.as_str().try_into().unwrap())
         .publish_subscribe::<Tick>()
         .open_or_create()
         .expect("create pubsub service");
@@ -28,7 +38,7 @@ fn pubsub_event_waitset_round_trip() {
 
     // Paired event service used to wake the WaitSet on send.
     let event = node
-        .service_builder(&"sonic.smoke.tick.__sonic_event".try_into().unwrap())
+        .service_builder(&event_name.as_str().try_into().unwrap())
         .event()
         .open_or_create()
         .expect("create event service");
