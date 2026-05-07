@@ -533,13 +533,19 @@ impl Executor {
                                     }
                                 });
                             }
-                            TaskKind::Graph(_) => {
-                                // TODO(Task 14): wire the DAG scheduler here. For now, graph
-                                // dispatch is a no-op so the existing tests still pass without
-                                // graphs accidentally firing.
-                                #[cfg(feature = "tracing")]
-                                tracing::warn!(target: "sonic-executor",
-                                    "graph dispatch is unimplemented in Task 13; it lands in Task 14");
+                            TaskKind::Graph(graph) => {
+                                // Outer driver runs on the WaitSet thread; vertices run on the
+                                // pool. This avoids deadlock when worker_threads == 1 because
+                                // the WaitSet thread is NOT a pool worker.
+                                let pool_arc = Arc::clone(pool);
+                                let outcome = graph.run_once(&pool_arc, &id, &stop);
+                                if let Some(source) = outcome.error {
+                                    let mut g = err_slot.lock().unwrap();
+                                    if g.is_none() {
+                                        *g = Some(ExecutorError::Item { task_id: id.clone(), source });
+                                    }
+                                }
+                                let _ = outcome.stopped_chain; // chain-abort semantics: no extra bookkeeping at task level
                             }
                         }
                     }
@@ -642,6 +648,15 @@ fn run_item_catch_unwind(
             };
             Err::<crate::ControlFlow, crate::ItemError>(Box::new(PanickedTask(msg)))
         })
+}
+
+/// Public-within-crate wrapper so `graph.rs` can call `run_item_catch_unwind`
+/// without depending on its private name.
+pub(crate) fn run_item_catch_unwind_external(
+    item: &mut dyn ExecutableItem,
+    ctx: &mut crate::context::Context<'_>,
+) -> crate::ExecuteResult {
+    run_item_catch_unwind(item, ctx)
 }
 
 /// Record the first error into `slot`. Subsequent errors are silently dropped.

@@ -151,6 +151,218 @@ impl GraphBuilder {
     }
 }
 
+// ── Graph scheduler (Task 14) ─────────────────────────────────────────────────
+
+use crate::context::Stoppable;
+use crate::pool::Pool;
+use crate::task_id::TaskId;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+
+/// Outcome of running a graph once.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) struct GraphRunOutcome {
+    #[allow(clippy::redundant_pub_crate)]
+    pub(crate) error: Option<crate::error::ItemError>,
+    #[allow(clippy::redundant_pub_crate)]
+    pub(crate) stopped_chain: bool,
+}
+
+/// Wrapper around `*mut dyn ExecutableItem` that asserts Send+Sync.
+struct VertexPtr(*mut dyn ExecutableItem);
+
+// SAFETY: the executor guarantees a vertex runs on at most one thread at
+// a time (the in-degree counter sequences dispatches), and the pointer is
+// stable for the lifetime of `Graph::run_once` (the underlying Box is not
+// moved while we hold &mut self in run_once).
+#[allow(unsafe_code)]
+unsafe impl Send for VertexPtr {}
+#[allow(unsafe_code)]
+unsafe impl Sync for VertexPtr {}
+
+/// Shared graph dispatch state. Owned via Arc by the `WaitSet` thread and
+/// every pool job spawned during a single `run_once` invocation.
+struct GraphRuntime {
+    items: Vec<VertexPtr>,
+    succ: Vec<Vec<usize>>,
+    counters: Vec<AtomicUsize>,
+    pending: AtomicUsize,
+    stop_flag: AtomicBool,
+    first_err: Mutex<Option<crate::error::ItemError>>,
+    stop_chain_seen: AtomicBool,
+    done_cv: (Mutex<()>, Condvar),
+}
+
+impl GraphRuntime {
+    /// Account for a vertex that was skipped (stop already set when it
+    /// would have run). Same accounting as `finalise_ran` but no successor
+    /// dispatch.
+    fn finalise_skipped(self: &Arc<Self>, i: usize) {
+        if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.notify_done();
+            return;
+        }
+        for &j in &self.succ[i] {
+            self.cancel_subtree(j);
+        }
+    }
+
+    /// Walk a subtree from `root` and mark every vertex as "done" without
+    /// running it. Used when a stop happens and we need to drain pending.
+    fn cancel_subtree(self: &Arc<Self>, root: usize) {
+        let mut stack = vec![root];
+        while let Some(u) = stack.pop() {
+            // If counter is already MAX, this vertex was already cancelled.
+            let prev = self.counters[u].swap(usize::MAX, Ordering::AcqRel);
+            if prev != usize::MAX {
+                if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    self.notify_done();
+                    return;
+                }
+                for &v in &self.succ[u] {
+                    stack.push(v);
+                }
+            }
+        }
+    }
+
+    fn notify_done(self: &Arc<Self>) {
+        let _g = self.done_cv.0.lock().unwrap();
+        self.done_cv.1.notify_all();
+    }
+}
+
+impl Graph {
+    /// Dispatch this graph once and block until completion.
+    ///
+    /// Runs on the calling thread (the `WaitSet` thread). Vertices are
+    /// dispatched into `pool` and run concurrently; ready successors are
+    /// piped back to this thread via a crossbeam channel.
+    #[allow(unsafe_code, clippy::too_many_lines)]
+    pub(crate) fn run_once(
+        &mut self,
+        pool: &Arc<Pool>,
+        task_id: &TaskId,
+        stop: &Stoppable,
+    ) -> GraphRunOutcome {
+        let n = self.items.len();
+        let counters: Vec<AtomicUsize> = self
+            .in_degree
+            .iter()
+            .map(|d| AtomicUsize::new(*d))
+            .collect();
+
+        let runtime = Arc::new(GraphRuntime {
+            items: self.items.iter_mut().map(|b| VertexPtr(std::ptr::from_mut(b.as_mut()))).collect(),
+            succ: self.successors.clone(),
+            counters,
+            pending: AtomicUsize::new(n),
+            stop_flag: AtomicBool::new(false),
+            first_err: Mutex::new(None),
+            stop_chain_seen: AtomicBool::new(false),
+            done_cv: (Mutex::new(()), Condvar::new()),
+        });
+
+        // Re-dispatch channel: completed vertex closures push successors
+        // that became ready; this thread drains the channel and submits
+        // them via `dispatch`.
+        let (ready_tx, ready_rx) = crossbeam_channel::unbounded::<usize>();
+
+        let dispatch = {
+            let runtime = Arc::clone(&runtime);
+            let pool = Arc::clone(pool);
+            let task_id = task_id.clone();
+            let stop = stop.clone();
+            move |i: usize| {
+                let runtime = Arc::clone(&runtime);
+                let ready_tx = ready_tx.clone();
+                let task_id = task_id.clone();
+                let stop = stop.clone();
+                pool.submit(move || {
+                    if runtime.stop_flag.load(Ordering::Acquire) {
+                        runtime.finalise_skipped(i);
+                        return;
+                    }
+                    let mut ctx = crate::context::Context::new(&task_id, &stop);
+                    let ptr = runtime.items[i].0;
+                    let res = crate::executor::run_item_catch_unwind_external(
+                        // SAFETY: VertexPtr is stable for the duration of run_once
+                        // (the Box is not moved). In-degree counters guarantee at
+                        // most one concurrent execution of any given vertex.
+                        unsafe { &mut *ptr },
+                        &mut ctx,
+                    );
+                    match &res {
+                        Ok(crate::ControlFlow::Continue) => {}
+                        Ok(crate::ControlFlow::StopChain) => {
+                            runtime.stop_chain_seen.store(true, Ordering::Release);
+                            runtime.stop_flag.store(true, Ordering::Release);
+                        }
+                        Err(_) => runtime.stop_flag.store(true, Ordering::Release),
+                    }
+                    if let Err(e) = res {
+                        let mut g = runtime.first_err.lock().unwrap();
+                        if g.is_none() {
+                            *g = Some(e);
+                        }
+                    }
+                    if runtime.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                        runtime.notify_done();
+                    } else if runtime.stop_flag.load(Ordering::Acquire) {
+                        for &j in &runtime.succ[i] {
+                            runtime.cancel_subtree(j);
+                        }
+                    } else {
+                        for &j in &runtime.succ[i] {
+                            if runtime.counters[j].fetch_sub(1, Ordering::AcqRel) == 1 {
+                                let _ = ready_tx.send(j);
+                            }
+                        }
+                    }
+                });
+            }
+        };
+
+        // Seed: dispatch every initially-ready vertex (in-degree 0). By
+        // construction the only such vertex is the root.
+        for i in 0..n {
+            if runtime.counters[i].load(Ordering::Acquire) == 0 {
+                dispatch(i);
+            }
+        }
+
+        // Drain ready_rx until pending hits 0.
+        let (lock, condvar) = &runtime.done_cv;
+        loop {
+            // Drain whatever ready successors are pending.
+            while let Ok(i) = ready_rx.try_recv() {
+                dispatch(i);
+            }
+            // Fast-path: check pending without acquiring the lock.
+            if runtime.pending.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            // Slow path: acquire the lock, re-check, then wait briefly.
+            // condvar::wait_timeout requires we hold the guard across the
+            // call, so we intentionally keep it alive that long.
+            let guard = lock.lock().unwrap();
+            if runtime.pending.load(Ordering::Acquire) == 0 {
+                drop(guard);
+                break;
+            }
+            drop(condvar.wait_timeout(guard, std::time::Duration::from_millis(5)).unwrap().0);
+        }
+        // Final drain.
+        while ready_rx.try_recv().is_ok() {}
+
+        let mut first_err = runtime.first_err.lock().unwrap();
+        GraphRunOutcome {
+            error: first_err.take(),
+            stopped_chain: runtime.stop_chain_seen.load(Ordering::Acquire),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
