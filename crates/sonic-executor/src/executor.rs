@@ -7,6 +7,7 @@
 
 use crate::context::Stoppable;
 use crate::error::ExecutorError;
+use crate::shutdown;
 use crate::item::ExecutableItem;
 use crate::monitor::{ExecutionMonitor, NoopMonitor};
 use crate::observer::{NoopObserver, Observer};
@@ -216,12 +217,26 @@ impl Executor {
 }
 
 /// Builder for [`Executor`].
-#[derive(Default)]
 pub struct ExecutorBuilder {
     worker_threads: Option<usize>,
     observer: Option<Arc<dyn Observer>>,
     monitor: Option<Arc<dyn ExecutionMonitor>>,
     worker_attrs: ThreadAttributes,
+    /// Whether to install a process-wide Ctrl-C → [`Stoppable::stop`] bridge.
+    /// Defaults to `true` when the `ctrlc-default` feature is enabled.
+    install_ctrlc: bool,
+}
+
+impl Default for ExecutorBuilder {
+    fn default() -> Self {
+        Self {
+            worker_threads: None,
+            observer: None,
+            monitor: None,
+            worker_attrs: ThreadAttributes::default(),
+            install_ctrlc: cfg!(feature = "ctrlc-default"),
+        }
+    }
 }
 
 impl ExecutorBuilder {
@@ -254,6 +269,16 @@ impl ExecutorBuilder {
     #[allow(clippy::missing_const_for_fn)]
     pub fn worker_attrs(mut self, attrs: ThreadAttributes) -> Self {
         self.worker_attrs = attrs;
+        self
+    }
+
+    /// Override whether to install a process-wide Ctrl-C handler that calls
+    /// [`Stoppable::stop`] on SIGINT. Has no effect if the `ctrlc-default`
+    /// feature is disabled (the handler is never installed regardless). Pass
+    /// `false` if you want to handle SIGINT yourself.
+    #[must_use]
+    pub const fn install_ctrlc(mut self, yes: bool) -> Self {
+        self.install_ctrlc = yes;
         self
     }
 
@@ -316,7 +341,7 @@ impl ExecutorBuilder {
         let monitor: Arc<dyn ExecutionMonitor> =
             self.monitor.unwrap_or_else(|| Arc::new(NoopMonitor));
 
-        Ok(Executor {
+        let exec = Executor {
             node,
             pool,
             tasks: Vec::new(),
@@ -326,7 +351,13 @@ impl ExecutorBuilder {
             stop_listener,
             observer,
             monitor,
-        })
+        };
+
+        if self.install_ctrlc {
+            shutdown::install_ctrlc(exec.stoppable.clone())?;
+        }
+
+        Ok(exec)
     }
 }
 

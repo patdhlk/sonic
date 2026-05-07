@@ -19,6 +19,7 @@ mod observer;
 mod pool;
 mod runner;
 mod service;
+mod shutdown;
 mod task_id;
 mod task_kind;
 mod thread_attrs;
