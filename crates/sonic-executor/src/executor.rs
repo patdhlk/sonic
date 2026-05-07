@@ -379,22 +379,74 @@ impl ExecutorBuilder {
 impl Executor {
     /// Run the executor until [`Stoppable::stop`] is called or a task signals
     /// stop via [`crate::Context::stop_executor`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
+    ///
+    /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
+    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
+    ///
+    /// If multiple items error in the same dispatch iteration, only the first
+    /// is preserved; subsequent errors are discarded silently. To observe
+    /// every error, attach an [`Observer`](crate::Observer) and read errors
+    /// via [`Observer::on_app_error`](crate::Observer::on_app_error).
     pub fn run(&mut self) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Forever)
     }
 
     /// Run for at most `max` wall-clock duration, then return.
+    ///
+    /// # Errors
+    ///
+    /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
+    ///
+    /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
+    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
+    ///
+    /// If multiple items error in the same dispatch iteration, only the first
+    /// is preserved; subsequent errors are discarded silently. To observe
+    /// every error, attach an [`Observer`](crate::Observer) and read errors
+    /// via [`Observer::on_app_error`](crate::Observer::on_app_error).
     pub fn run_for(&mut self, max: Duration) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Until(Instant::now() + max))
     }
 
     /// Run until `n` full barrier-cycles (`WaitSet` wakeups) have completed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
+    ///
+    /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
+    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
+    ///
+    /// If multiple items error in the same dispatch iteration, only the first
+    /// is preserved; subsequent errors are discarded silently. To observe
+    /// every error, attach an [`Observer`](crate::Observer) and read errors
+    /// via [`Observer::on_app_error`](crate::Observer::on_app_error).
     pub fn run_n(&mut self, n: usize) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Iterations(n))
     }
 
     /// Run until `predicate()` returns true. Checked after each `WaitSet`
     /// wakeup.
+    ///
+    /// # Errors
+    ///
+    /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
+    ///
+    /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
+    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
+    ///
+    /// If multiple items error in the same dispatch iteration, only the first
+    /// is preserved; subsequent errors are discarded silently. To observe
+    /// every error, attach an [`Observer`](crate::Observer) and read errors
+    /// via [`Observer::on_app_error`](crate::Observer::on_app_error).
     pub fn run_until<F: FnMut() -> bool>(&mut self, mut predicate: F) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Predicate(&mut predicate))
     }
