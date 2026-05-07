@@ -240,7 +240,7 @@ pub struct ExecutorBuilder {
     monitor: Option<Arc<dyn ExecutionMonitor>>,
     worker_attrs: ThreadAttributes,
     /// Whether to install a process-wide Ctrl-C → [`Stoppable::stop`] bridge.
-    /// Defaults to `true` when the `ctrlc-default` feature is enabled.
+    /// Defaults to `true` when the `ctrlc` feature is enabled.
     install_ctrlc: bool,
 }
 
@@ -251,7 +251,7 @@ impl Default for ExecutorBuilder {
             observer: None,
             monitor: None,
             worker_attrs: ThreadAttributes::new(),
-            install_ctrlc: cfg!(feature = "ctrlc-default"),
+            install_ctrlc: cfg!(feature = "ctrlc"),
         }
     }
 }
@@ -290,7 +290,7 @@ impl ExecutorBuilder {
     }
 
     /// Override whether to install a process-wide Ctrl-C handler that calls
-    /// [`Stoppable::stop`] on SIGINT. Has no effect if the `ctrlc-default`
+    /// [`Stoppable::stop`] on SIGINT. Has no effect if the `ctrlc`
     /// feature is disabled (the handler is never installed regardless). Pass
     /// `false` if you want to handle SIGINT yourself.
     #[must_use]
@@ -884,7 +884,7 @@ impl ExecutorGraphBuilder<'_> {
     }
 
     /// Designate the root vertex (its triggers gate the graph).
-    pub fn root(&mut self, v: crate::graph::Vertex) -> &mut Self {
+    pub const fn root(&mut self, v: crate::graph::Vertex) -> &mut Self {
         self.builder.root(v);
         self
     }

@@ -8,8 +8,8 @@ members = [
 
 [workspace.package]
 version      = "0.1.0"
-edition      = "2021"
-rust-version = "1.81"
+edition      = "2024"
+rust-version = "1.85"
 license      = "Apache-2.0 OR MIT"
 repository   = "https://github.com/patdhlk/sonic"
 authors      = ["Patrick Dahlke"]

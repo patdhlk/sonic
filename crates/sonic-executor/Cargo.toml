@@ -24,10 +24,10 @@ ctrlc         = { workspace = true, optional = true }
 proptest = { workspace = true }
 
 [features]
-default      = ["ctrlc-default"]
+default      = ["ctrlc"]
 tracing      = ["dep:tracing"]
 thread_attrs = ["dep:core_affinity", "dep:libc"]
-ctrlc-default = ["dep:ctrlc"]
+ctrlc        = ["dep:ctrlc"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", optional = true }

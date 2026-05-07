@@ -6,9 +6,9 @@
 use crate::context::Stoppable;
 
 /// Install a process-wide Ctrl-C handler that calls `stop.stop()` on SIGINT.
-/// No-op if the `ctrlc-default` feature is disabled. Idempotent: only the
+/// No-op if the `ctrlc` feature is disabled. Idempotent: only the
 /// first call installs the handler; later calls are silently ignored.
-#[cfg(feature = "ctrlc-default")]
+#[cfg(feature = "ctrlc")]
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn install_ctrlc(stop: Stoppable) -> Result<(), crate::error::ExecutorError> {
     static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -20,8 +20,8 @@ pub(crate) fn install_ctrlc(stop: Stoppable) -> Result<(), crate::error::Executo
     Ok(())
 }
 
-/// No-op fallback when `ctrlc-default` feature is disabled.
-#[cfg(not(feature = "ctrlc-default"))]
+/// No-op fallback when `ctrlc` feature is disabled.
+#[cfg(not(feature = "ctrlc"))]
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn install_ctrlc(_: Stoppable) -> Result<(), crate::error::ExecutorError> {
     Ok(())

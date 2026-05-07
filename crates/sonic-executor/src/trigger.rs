@@ -49,7 +49,7 @@ impl TriggerDeclarer<'_> {
     /// Internal constructor used by the executor when adding a task.
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub(crate) fn new_internal() -> Self {
+    pub(crate) const fn new_internal() -> Self {
         Self {
             _marker: core::marker::PhantomData,
             decls: Vec::new(),
@@ -57,7 +57,7 @@ impl TriggerDeclarer<'_> {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_test() -> Self {
+    pub(crate) const fn new_test() -> Self {
         Self::new_internal()
     }
 
