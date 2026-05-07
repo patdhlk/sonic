@@ -233,7 +233,7 @@ impl Default for ExecutorBuilder {
             worker_threads: None,
             observer: None,
             monitor: None,
-            worker_attrs: ThreadAttributes::default(),
+            worker_attrs: ThreadAttributes::new(),
             install_ctrlc: cfg!(feature = "ctrlc-default"),
         }
     }
