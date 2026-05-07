@@ -1,5 +1,6 @@
 //! Per-invocation context handed to [`ExecutableItem::execute`].
 
+use crate::observer::{Observer, UserEvent};
 use crate::task_id::TaskId;
 use iceoryx2::port::notifier::Notifier as IxNotifier;
 use iceoryx2::prelude::ipc;
@@ -85,16 +86,15 @@ impl core::fmt::Debug for Stoppable {
 pub struct Context<'a> {
     task_id: &'a TaskId,
     stop: &'a Stoppable,
-    // Future: observer hook lands here in Task 19. Keep the struct opaque so
-    // we can grow it without breaking ExecutableItem implementors.
+    observer: &'a dyn Observer,
     _private: (),
 }
 
 impl<'a> Context<'a> {
     /// Internal constructor used by the executor and the test harness.
     #[doc(hidden)]
-    pub const fn new(task_id: &'a TaskId, stop: &'a Stoppable) -> Self {
-        Self { task_id, stop, _private: () }
+    pub fn new(task_id: &'a TaskId, stop: &'a Stoppable, observer: &'a dyn Observer) -> Self {
+        Self { task_id, stop, observer, _private: () }
     }
 
     /// Identifier of the task currently executing.
@@ -110,6 +110,11 @@ impl<'a> Context<'a> {
     /// Get a clonable [`Stoppable`] handle that other threads may hold.
     pub fn stoppable(&self) -> Stoppable {
         self.stop.clone()
+    }
+
+    /// Forward a user event to the observer (no-op if no observer is configured).
+    pub fn send_event(&self, ev: UserEvent) {
+        self.observer.on_send_event(self.task_id.clone(), ev);
     }
 }
 
@@ -130,6 +135,7 @@ impl ContextHarness {
     }
 
     pub(crate) fn context(&self) -> Context<'_> {
-        Context::new(&self.task_id, &self.stop)
+        static NOOP: crate::observer::NoopObserver = crate::observer::NoopObserver;
+        Context::new(&self.task_id, &self.stop, &NOOP)
     }
 }

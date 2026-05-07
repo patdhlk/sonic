@@ -8,6 +8,7 @@
 use crate::context::Stoppable;
 use crate::error::ExecutorError;
 use crate::item::ExecutableItem;
+use crate::observer::{NoopObserver, Observer};
 use crate::pool::Pool;
 use crate::task_id::TaskId;
 use crate::task_kind::TaskKind;
@@ -47,6 +48,8 @@ pub struct Executor {
     /// the `WaitSet` guard inside `dispatch_loop`. Created at `build()` time so
     /// any `Stoppable` clone (taken before or after `run()`) carries the waker.
     pub(crate) stop_listener: Arc<IxListener<ipc::Service>>,
+    /// Lifecycle observer. Defaults to a no-op.
+    pub(crate) observer: Arc<dyn Observer>,
 }
 
 // SAFETY: `IxListener<ipc::Service>` is `!Send` for the same Rc-based
@@ -212,6 +215,7 @@ impl Executor {
 #[derive(Default)]
 pub struct ExecutorBuilder {
     worker_threads: Option<usize>,
+    observer: Option<Arc<dyn Observer>>,
 }
 
 impl ExecutorBuilder {
@@ -220,6 +224,13 @@ impl ExecutorBuilder {
     #[must_use]
     pub const fn worker_threads(mut self, n: usize) -> Self {
         self.worker_threads = Some(n);
+        self
+    }
+
+    /// Attach a lifecycle observer. If not called, a no-op observer is used.
+    #[must_use]
+    pub fn observer(mut self, obs: Arc<dyn Observer>) -> Self {
+        self.observer = Some(obs);
         self
     }
 
@@ -276,6 +287,9 @@ impl ExecutorBuilder {
         // from the moment the executor is built.
         let stoppable = Stoppable::with_waker(stop_notifier);
 
+        let observer: Arc<dyn Observer> =
+            self.observer.unwrap_or_else(|| Arc::new(NoopObserver));
+
         Ok(Executor {
             node,
             pool,
@@ -284,6 +298,7 @@ impl ExecutorBuilder {
             stoppable,
             next_id: AtomicU64::new(0),
             stop_listener,
+            observer,
         })
     }
 }
@@ -336,7 +351,12 @@ impl Executor {
             return Err(ExecutorError::AlreadyRunning);
         }
 
+        self.observer.on_executor_up();
         let result = self.dispatch_loop(&mut mode);
+        match &result {
+            Ok(()) => self.observer.on_executor_down(),
+            Err(e) => self.observer.on_executor_error(e),
+        }
 
         self.running.store(false, Ordering::SeqCst);
         result
@@ -456,6 +476,7 @@ impl Executor {
             let tasks_ptr = &mut self.tasks as *mut Vec<TaskEntry>;
             let pool = &self.pool;
             let stoppable_inner = self.stoppable.clone();
+            let observer_inner = Arc::clone(&self.observer);
             // Raw pointer to the stop listener for draining inside the callback.
             // SAFETY: same as stop_listener_ref above — the Arc is alive for
             // the lifetime of dispatch_loop.
@@ -487,16 +508,23 @@ impl Executor {
                         let id = task.id.clone();
                         let stop = stoppable_inner.clone();
                         let err_slot = Arc::clone(&iter_err);
+                        let obs = Arc::clone(&observer_inner);
 
                         match &mut task.kind {
                             TaskKind::Single(item_box) => {
+                                // Collect app metadata before moving the pointer.
+                                let app_id = item_box.app_id();
+                                let app_inst = item_box.app_instance_id();
                                 // SAFETY: SendItemPtr safety doc above. barrier()
                                 // guarantees exclusive access within each iteration.
                                 let item_ptr =
                                     SendItemPtr::new(item_box.as_mut() as *mut _);
                                 pool.submit(move || {
                                     let mut ctx =
-                                        crate::context::Context::new(&id, &stop);
+                                        crate::context::Context::new(&id, &stop, obs.as_ref());
+                                    if let Some(aid) = app_id {
+                                        obs.on_app_start(id.clone(), aid, app_inst);
+                                    }
                                     // item_ptr.get() is a method call — Rust 2021
                                     // per-field capture analysis captures the whole
                                     // SendItemPtr (Send) rather than the inner raw
@@ -510,18 +538,32 @@ impl Executor {
                                         unsafe { &mut *raw },
                                         &mut ctx,
                                     );
+                                    if let Err(ref e) = res {
+                                        obs.on_app_error(id.clone(), e.as_ref());
+                                    }
+                                    if app_id.is_some() {
+                                        obs.on_app_stop(id.clone());
+                                    }
                                     record_first_err(&err_slot, &id, res);
                                 });
                             }
                             TaskKind::Chain(items) => {
+                                // Collect app metadata for each chain item before moving pointers.
+                                let item_meta: Vec<(Option<u32>, Option<u32>)> = items
+                                    .iter()
+                                    .map(|b| (b.app_id(), b.app_instance_id()))
+                                    .collect();
                                 let item_ptrs: Vec<SendItemPtr> = items
                                     .iter_mut()
                                     .map(|b| SendItemPtr::new(b.as_mut() as *mut _))
                                     .collect();
                                 pool.submit(move || {
                                     let mut ctx =
-                                        crate::context::Context::new(&id, &stop);
-                                    for ptr in item_ptrs {
+                                        crate::context::Context::new(&id, &stop, obs.as_ref());
+                                    for (ptr, (app_id, app_inst)) in item_ptrs.into_iter().zip(item_meta) {
+                                        if let Some(aid) = app_id {
+                                            obs.on_app_start(id.clone(), aid, app_inst);
+                                        }
                                         // SAFETY: pool.barrier() (below) is called
                                         // before we leave the callback scope, so
                                         // the borrows are bounded to this iteration.
@@ -530,6 +572,12 @@ impl Executor {
                                             unsafe { &mut *raw },
                                             &mut ctx,
                                         );
+                                        if let Err(ref e) = res {
+                                            obs.on_app_error(id.clone(), e.as_ref());
+                                        }
+                                        if app_id.is_some() {
+                                            obs.on_app_stop(id.clone());
+                                        }
                                         match res {
                                             Ok(crate::ControlFlow::Continue) => {}
                                             Ok(crate::ControlFlow::StopChain) => break,
@@ -550,7 +598,7 @@ impl Executor {
                                 // pool. This avoids deadlock when worker_threads == 1 because
                                 // the WaitSet thread is NOT a pool worker.
                                 let pool_arc = Arc::clone(pool);
-                                let outcome = graph.run_once(&pool_arc, &id, &stop);
+                                let outcome = graph.run_once(&pool_arc, &id, &stop, &obs);
                                 if let Some(source) = outcome.error {
                                     let mut g = err_slot.lock().unwrap();
                                     if g.is_none() {

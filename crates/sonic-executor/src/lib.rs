@@ -14,6 +14,7 @@ mod error;
 mod executor;
 mod graph;
 mod item;
+mod observer;
 mod pool;
 mod runner;
 mod service;
@@ -21,6 +22,7 @@ mod task_id;
 mod task_kind;
 mod trigger;
 
+pub use observer::{Observer, UserEvent};
 pub use channel::{Channel, Publisher, Subscriber, EVENT_SUFFIX};
 pub use service::{
     ActiveRequest, Client, PendingRequest, Server, Service, REQ_EVENT_SUFFIX, RESP_EVENT_SUFFIX,

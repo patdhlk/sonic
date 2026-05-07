@@ -154,6 +154,7 @@ impl GraphBuilder {
 // ── Graph scheduler (Task 14) ─────────────────────────────────────────────────
 
 use crate::context::Stoppable;
+use crate::observer::Observer;
 use crate::pool::Pool;
 use crate::task_id::TaskId;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -191,6 +192,7 @@ struct GraphRuntime {
     first_err: Mutex<Option<crate::error::ItemError>>,
     stop_chain_seen: AtomicBool,
     done_cv: (Mutex<()>, Condvar),
+    observer: Arc<dyn Observer>,
 }
 
 impl GraphRuntime {
@@ -244,6 +246,7 @@ impl Graph {
         pool: &Arc<Pool>,
         task_id: &TaskId,
         stop: &Stoppable,
+        observer: &Arc<dyn Observer>,
     ) -> GraphRunOutcome {
         let n = self.items.len();
         let counters: Vec<AtomicUsize> = self
@@ -261,6 +264,7 @@ impl Graph {
             first_err: Mutex::new(None),
             stop_chain_seen: AtomicBool::new(false),
             done_cv: (Mutex::new(()), Condvar::new()),
+            observer: Arc::clone(observer),
         });
 
         // Re-dispatch channel: completed vertex closures push successors
@@ -278,13 +282,21 @@ impl Graph {
                 let ready_tx = ready_tx.clone();
                 let task_id = task_id.clone();
                 let stop = stop.clone();
+                // Extract app metadata before moving the pointer into the closure.
+                // SAFETY: we are on the WaitSet thread and in-degree sequencing
+                // ensures no other thread is currently executing vertex `i`.
+                let app_id = unsafe { (*runtime.items[i].0).app_id() };
+                let app_inst = unsafe { (*runtime.items[i].0).app_instance_id() };
                 pool.submit(move || {
                     if runtime.stop_flag.load(Ordering::Acquire) {
                         runtime.finalise_skipped(i);
                         return;
                     }
-                    let mut ctx = crate::context::Context::new(&task_id, &stop);
+                    let mut ctx = crate::context::Context::new(&task_id, &stop, runtime.observer.as_ref());
                     let ptr = runtime.items[i].0;
+                    if let Some(aid) = app_id {
+                        runtime.observer.on_app_start(task_id.clone(), aid, app_inst);
+                    }
                     let res = crate::executor::run_item_catch_unwind_external(
                         // SAFETY: VertexPtr is stable for the duration of run_once
                         // (the Box is not moved). In-degree counters guarantee at
@@ -292,6 +304,12 @@ impl Graph {
                         unsafe { &mut *ptr },
                         &mut ctx,
                     );
+                    if let Err(ref e) = res {
+                        runtime.observer.on_app_error(task_id.clone(), e.as_ref());
+                    }
+                    if app_id.is_some() {
+                        runtime.observer.on_app_stop(task_id.clone());
+                    }
                     match &res {
                         Ok(crate::ControlFlow::Continue) => {}
                         Ok(crate::ControlFlow::StopChain) => {
