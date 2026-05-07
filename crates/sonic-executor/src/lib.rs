@@ -1,8 +1,21 @@
-//! Execution framework for iceoryx2-based Rust applications.
+//! # sonic-executor
 //!
-//! See `docs/superpowers/specs/2026-05-06-sonic-executor-design.md` for the
-//! design rationale.
+//! Execution framework on top of [iceoryx2](https://docs.rs/iceoryx2).
+//! Provides:
+//!
+//! * [`ExecutableItem`] — the unit of work the executor schedules.
+//! * [`Executor`] / [`Runner`] — the run loop and a dedicated-thread host.
+//! * [`Channel<T>`](Channel) / [`Service`] — pub/sub and request-response primitives
+//!   with paired event services so subscribers wake on send.
+//! * Sequential [chains](Executor::add_chain) and parallel
+//!   [graphs](Executor::add_graph).
+//! * Signal/slot via [`signal_slot::pair`].
+//! * Lifecycle hooks via [`Observer`] and timing hooks via
+//!   [`ExecutionMonitor`].
+//!
+//! See the workspace `README.md` for a quick-start.
 #![doc(html_root_url = "https://docs.rs/sonic-executor/0.1.0")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod chain;
 mod channel;
