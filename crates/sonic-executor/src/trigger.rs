@@ -2,11 +2,11 @@
 //! the [`TriggerDeclarer`]; the executor turns the recorded declarations into
 //! `WaitSet` attachments at add-time.
 
+use crate::payload::Payload;
 use crate::Subscriber;
 use core::time::Duration;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::prelude::ipc;
-use iceoryx2::prelude::ZeroCopySend;
 use std::sync::Arc;
 
 /// Listener type the rest of the crate manipulates. Aliased so client code
@@ -62,7 +62,7 @@ impl TriggerDeclarer<'_> {
     }
 
     /// Declare that the item should fire when the given subscriber receives.
-    pub fn subscriber<T: ZeroCopySend + Default + core::fmt::Debug + 'static>(
+    pub fn subscriber<T: Payload>(
         &mut self,
         sub: &Subscriber<T>,
     ) -> &mut Self {
@@ -80,7 +80,7 @@ impl TriggerDeclarer<'_> {
 
     /// Declare a subscriber trigger that *also* fires the deadline if no
     /// event arrives within `deadline`.
-    pub fn deadline<T: ZeroCopySend + Default + core::fmt::Debug + 'static>(
+    pub fn deadline<T: Payload>(
         &mut self,
         sub: &Subscriber<T>,
         deadline: impl Into<Duration>,
@@ -142,13 +142,13 @@ impl TriggerDeclarer<'_> {
 mod tests {
     use super::*;
     use crate::error::ExecutorError;
+    use iceoryx2::prelude::*;
 
-    #[derive(Debug, Default, Clone, Copy, iceoryx2::prelude::ZeroCopySend)]
+    #[derive(Debug, Default, Clone, Copy, ZeroCopySend)]
     #[repr(C)]
     struct Msg(u32);
 
     fn make_subscriber(topic: &str) -> crate::Subscriber<Msg> {
-        use iceoryx2::prelude::*;
         let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
         let ch = crate::Channel::<Msg>::open_or_create(&node, topic).unwrap();
         ch.subscriber().unwrap()

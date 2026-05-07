@@ -5,9 +5,9 @@ use crate::control_flow::{ControlFlow, ExecuteResult};
 use crate::error::ExecutorError;
 use crate::executor::Executor;
 use crate::item::ExecutableItem;
+use crate::payload::Payload;
 use crate::trigger::TriggerDeclarer;
 use crate::{Publisher, Subscriber};
-use iceoryx2::prelude::ZeroCopySend;
 
 /// Type alias for the optional before-send callback stored inside [`SignalItem`].
 type BeforeSendCb<T> = Option<Box<dyn FnMut(&mut T) -> bool + Send + 'static>>;
@@ -26,7 +26,7 @@ pub enum TakePolicy {
 }
 
 /// Open a fresh signal/slot pair backed by a `Channel<T>`.
-pub fn pair<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static>(
+pub fn pair<T: Payload + Copy + Send>(
     exec: &mut Executor,
     topic: &str,
 ) -> Result<(SignalItem<T>, SlotItem<T>), ExecutorError> {
@@ -50,13 +50,13 @@ pub fn pair<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static
 
 /// Signal half of a signal/slot pair: an [`ExecutableItem`] that, when fired,
 /// publishes a message on the underlying channel.
-pub struct SignalItem<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> {
+pub struct SignalItem<T: Payload + Copy + Send> {
     publisher: Publisher<T>,
     before_send: BeforeSendCb<T>,
     _marker: core::marker::PhantomData<T>,
 }
 
-impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> SignalItem<T> {
+impl<T: Payload + Copy + Send> SignalItem<T> {
     /// Install a callback invoked just before each send. Returning `false`
     /// skips the send and the `execute` call returns `StopChain`.
     #[must_use]
@@ -69,9 +69,7 @@ impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> Signa
     }
 }
 
-impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> ExecutableItem
-    for SignalItem<T>
-{
+impl<T: Payload + Copy + Send> ExecutableItem for SignalItem<T> {
     fn declare_triggers(&mut self, _d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         Ok(())
     }
@@ -96,14 +94,14 @@ impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> Execu
 
 /// Slot half of a signal/slot pair: an [`ExecutableItem`] that, when its
 /// channel receives a message, runs the optional `after_recv` callback.
-pub struct SlotItem<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> {
+pub struct SlotItem<T: Payload + Copy + Send> {
     subscriber: Subscriber<T>,
     policy: TakePolicy,
     after_recv: AfterRecvCb<T>,
     _marker: core::marker::PhantomData<T>,
 }
 
-impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> SlotItem<T> {
+impl<T: Payload + Copy + Send> SlotItem<T> {
     /// Override the default [`TakePolicy::Single`].
     #[must_use]
     pub const fn take_policy(mut self, p: TakePolicy) -> Self {
@@ -134,9 +132,7 @@ impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> SlotI
     }
 }
 
-impl<T: ZeroCopySend + Default + Copy + core::fmt::Debug + Send + 'static> ExecutableItem
-    for SlotItem<T>
-{
+impl<T: Payload + Copy + Send> ExecutableItem for SlotItem<T> {
     fn declare_triggers(&mut self, d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         d.subscriber(&self.subscriber);
         Ok(())

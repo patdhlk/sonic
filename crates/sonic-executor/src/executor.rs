@@ -10,6 +10,7 @@ use crate::error::ExecutorError;
 use crate::item::ExecutableItem;
 use crate::monitor::{ExecutionMonitor, NoopMonitor};
 use crate::observer::{NoopObserver, Observer};
+use crate::payload::Payload;
 use crate::pool::Pool;
 use crate::shutdown;
 use crate::task_id::TaskId;
@@ -73,7 +74,7 @@ impl Executor {
     }
 
     /// Open or create a pub/sub channel bound to this executor's node.
-    pub fn channel<T: ZeroCopySend + Default + core::fmt::Debug + 'static>(
+    pub fn channel<T: Payload>(
         &mut self,
         name: &str,
     ) -> Result<Arc<Channel<T>>, ExecutorError> {
@@ -86,8 +87,8 @@ impl Executor {
         name: &str,
     ) -> Result<Arc<crate::Service<Req, Resp>>, ExecutorError>
     where
-        Req: ZeroCopySend + Default + core::fmt::Debug + 'static,
-        Resp: ZeroCopySend + Default + core::fmt::Debug + 'static,
+        Req: Payload,
+        Resp: Payload,
     {
         crate::Service::open_or_create(&self.node, name)
     }
@@ -113,7 +114,7 @@ impl Executor {
     ) -> Result<TaskId, ExecutorError> {
         let id_arg: TaskId = id.into();
         // The item's `task_id()` override wins over the user-supplied id.
-        let id = item.task_id().map(TaskId::new).unwrap_or(id_arg);
+        let id = item.task_id().map_or(id_arg, TaskId::new);
         let mut declarer = TriggerDeclarer::new_internal();
         item.declare_triggers(&mut declarer)?;
         let decls = declarer.into_decls();
@@ -174,7 +175,7 @@ impl Executor {
         }
 
         // Head item's `task_id()` override wins over the user-supplied id.
-        let id = items[0].task_id().map(TaskId::new).unwrap_or(id);
+        let id = items[0].task_id().map_or(id, TaskId::new);
 
         // Head's triggers gate the chain.
         let mut head_declarer = TriggerDeclarer::new_internal();
@@ -386,7 +387,7 @@ impl Executor {
     /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
     ///
     /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
-    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::Iceoryx2`] if a `WaitSet` operation fails.
     /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
     ///
     /// If multiple items error in the same dispatch iteration, only the first
@@ -404,7 +405,7 @@ impl Executor {
     /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
     ///
     /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
-    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::Iceoryx2`] if a `WaitSet` operation fails.
     /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
     ///
     /// If multiple items error in the same dispatch iteration, only the first
@@ -422,7 +423,7 @@ impl Executor {
     /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
     ///
     /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
-    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::Iceoryx2`] if a `WaitSet` operation fails.
     /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
     ///
     /// If multiple items error in the same dispatch iteration, only the first
@@ -441,7 +442,7 @@ impl Executor {
     /// Returns the **first** [`ExecutorError`] surfaced during dispatch:
     ///
     /// * [`ExecutorError::Item`] if any item returns `Err` or panics.
-    /// * [`ExecutorError::Iceoryx2`] if a WaitSet operation fails.
+    /// * [`ExecutorError::Iceoryx2`] if a `WaitSet` operation fails.
     /// * [`ExecutorError::AlreadyRunning`] if the executor is already running.
     ///
     /// If multiple items error in the same dispatch iteration, only the first
@@ -705,9 +706,6 @@ impl Executor {
                                         match res {
                                             Ok(crate::ControlFlow::Continue) => {}
                                             Ok(crate::ControlFlow::StopChain) => break,
-                                            // Future unknown `ControlFlow` variants are treated
-                                            // as `Continue` — the safest default.
-                                            Ok(_) => {}
                                             Err(_) => {
                                                 record_first_err(&err_slot, &id, res);
                                                 break;

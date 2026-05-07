@@ -2,6 +2,7 @@
 //! that subscribers can be attached as triggers on the executor's `WaitSet`.
 
 use crate::error::ExecutorError;
+use crate::payload::Payload;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::port::notifier::Notifier as IxNotifier;
 use iceoryx2::port::publisher::Publisher as IxPublisher;
@@ -24,7 +25,7 @@ pub struct Channel<T: core::fmt::Debug + ZeroCopySend + 'static> {
     event: iceoryx2::service::port_factory::event::PortFactory<IpcService>,
 }
 
-impl<T: core::fmt::Debug + ZeroCopySend + 'static> Channel<T> {
+impl<T: Payload> Channel<T> {
     /// Open or create the channel by topic name.
     pub fn open_or_create(
         node: &iceoryx2::node::Node<IpcService>,
@@ -102,7 +103,7 @@ pub struct Publisher<T: core::fmt::Debug + ZeroCopySend + 'static> {
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<T: core::fmt::Debug + ZeroCopySend + 'static> Send for Publisher<T> {}
 
-impl<T: core::fmt::Debug + ZeroCopySend + 'static + Copy> Publisher<T> {
+impl<T: Payload + Copy> Publisher<T> {
     /// Send by value (copies). Notifies the paired event service on success.
     pub fn send_copy(&self, value: T) -> Result<(), ExecutorError> {
         self.inner
@@ -113,7 +114,7 @@ impl<T: core::fmt::Debug + ZeroCopySend + 'static + Copy> Publisher<T> {
     }
 }
 
-impl<T: ZeroCopySend + Default + core::fmt::Debug + 'static> Publisher<T> {
+impl<T: Payload> Publisher<T> {
     /// # Example
     ///
     /// ```no_run
@@ -175,7 +176,7 @@ pub struct Subscriber<T: core::fmt::Debug + ZeroCopySend + 'static> {
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<T: core::fmt::Debug + ZeroCopySend + 'static> Send for Subscriber<T> {}
 
-impl<T: core::fmt::Debug + ZeroCopySend + 'static> Subscriber<T> {
+impl<T: Payload> Subscriber<T> {
     /// Take the next sample, if any.
     pub fn take(&self) -> Result<Option<IxSample<IpcService, T, ()>>, ExecutorError> {
         self.inner.receive().map_err(ExecutorError::iceoryx2)

@@ -2,6 +2,7 @@
 //! services (one each for request- and response-available wakeups).
 
 use crate::error::ExecutorError;
+use crate::payload::Payload;
 use core::marker::PhantomData;
 use iceoryx2::node::Node;
 use iceoryx2::port::client::Client as IxClient;
@@ -23,8 +24,8 @@ pub const RESP_EVENT_SUFFIX: &str = ".__sonic_resp_event";
 /// Request/response service with two paired event services for wakeup.
 pub struct Service<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     rr: iceoryx2::service::port_factory::request_response::PortFactory<
         IpcService,
@@ -40,8 +41,8 @@ where
 
 impl<Req, Resp> Service<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     /// Open or create the service by name, creating the two paired event services.
     pub fn open_or_create(
@@ -139,8 +140,8 @@ where
 /// Server side of a `Service<Req, Resp>`. Receives requests and sends responses.
 pub struct Server<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     inner: IxServer<IpcService, Req, (), Resp, ()>,
     listener: Arc<IxListener<IpcService>>,
@@ -160,15 +161,15 @@ where
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<Req, Resp> Send for Server<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
 }
 
 impl<Req, Resp> Server<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
+    Req: Payload + Copy,
+    Resp: Payload + Copy,
 {
     /// Take the next pending request, if any.
     ///
@@ -202,8 +203,8 @@ where
 /// A received request, used to send the response.
 pub struct ActiveRequest<'s, Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     active: iceoryx2::active_request::ActiveRequest<IpcService, Req, (), Resp, ()>,
     server: &'s Server<Req, Resp>,
@@ -211,8 +212,8 @@ where
 
 impl<Req, Resp> ActiveRequest<'_, Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
+    Req: Payload + Copy,
+    Resp: Payload + Copy,
 {
     /// Send a response by value and notify the client's listener.
     pub fn respond_copy(self, resp: Resp) -> Result<(), ExecutorError> {
@@ -230,8 +231,8 @@ where
 /// Client side of a `Service<Req, Resp>`. Sends requests and receives responses.
 pub struct Client<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     inner: IxClient<IpcService, Req, (), Resp, ()>,
     listener: Arc<IxListener<IpcService>>,
@@ -248,15 +249,15 @@ where
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<Req, Resp> Send for Client<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
 }
 
 impl<Req, Resp> Client<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
+    Req: Payload + Copy,
+    Resp: Payload + Copy,
 {
     /// Send a request by value. Returns a `PendingRequest` handle for receiving
     /// the response(s), and notifies the server's listener.
@@ -277,8 +278,8 @@ where
 /// Handle to an in-flight request — receives the matching response(s).
 pub struct PendingRequest<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
     inner: iceoryx2::pending_response::PendingResponse<IpcService, Req, (), Resp, ()>,
 }
@@ -290,15 +291,15 @@ where
 #[allow(unsafe_code, clippy::non_send_fields_in_send_ty)]
 unsafe impl<Req, Resp> Send for PendingRequest<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + 'static,
+    Req: Payload,
+    Resp: Payload,
 {
 }
 
 impl<Req, Resp> PendingRequest<Req, Resp>
 where
-    Req: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
-    Resp: core::fmt::Debug + ZeroCopySend + Default + Copy + 'static,
+    Req: Payload + Copy,
+    Resp: Payload + Copy,
 {
     /// Try to receive the next response, if one has arrived.
     ///

@@ -28,6 +28,7 @@ mod graph;
 mod item;
 mod monitor;
 mod observer;
+mod payload;
 mod pool;
 mod runner;
 mod service;
@@ -39,6 +40,7 @@ mod thread_attrs;
 mod trigger;
 
 pub use channel::{Channel, Publisher, Subscriber, EVENT_SUFFIX};
+pub use payload::Payload;
 pub use condition::{wrap_with_condition, Conditional};
 pub use context::{Context, Stoppable};
 pub use control_flow::{ControlFlow, ExecuteResult};
