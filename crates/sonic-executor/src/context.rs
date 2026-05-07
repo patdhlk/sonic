@@ -94,7 +94,12 @@ impl<'a> Context<'a> {
     /// Internal constructor used by the executor and the test harness.
     #[doc(hidden)]
     pub fn new(task_id: &'a TaskId, stop: &'a Stoppable, observer: &'a dyn Observer) -> Self {
-        Self { task_id, stop, observer, _private: () }
+        Self {
+            task_id,
+            stop,
+            observer,
+            _private: (),
+        }
     }
 
     /// Identifier of the task currently executing.

@@ -33,7 +33,7 @@ fn pubsub_event_waitset_round_trip() {
         .open_or_create()
         .expect("create pubsub service");
 
-    let publisher  = pubsub.publisher_builder().create().expect("publisher");
+    let publisher = pubsub.publisher_builder().create().expect("publisher");
     let subscriber = pubsub.subscriber_builder().create().expect("subscriber");
 
     // Paired event service used to wake the WaitSet on send.
@@ -50,7 +50,9 @@ fn pubsub_event_waitset_round_trip() {
     let waitset = WaitSetBuilder::new()
         .create::<ipc::Service>()
         .expect("waitset");
-    let _guard = waitset.attach_notification(&listener).expect("attach listener");
+    let _guard = waitset
+        .attach_notification(&listener)
+        .expect("attach listener");
 
     // Publisher sends, notifier wakes the waitset.
     publisher.send_copy(Tick(7)).expect("send");

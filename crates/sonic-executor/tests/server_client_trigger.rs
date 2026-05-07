@@ -24,7 +24,9 @@ struct Resp(u64);
 #[test]
 fn server_trigger_fires_when_request_arrives() {
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    let svc = exec.service::<Req, Resp>(&unique("sonic.test.svc.trig")).unwrap();
+    let svc = exec
+        .service::<Req, Resp>(&unique("sonic.test.svc.trig"))
+        .unwrap();
     let server = svc.server().unwrap();
     let client = svc.client().unwrap();
 

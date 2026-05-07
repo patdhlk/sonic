@@ -33,9 +33,13 @@ fn monitor_brackets_each_execute() {
         .unwrap();
 
     exec.add(item_with_triggers(
-        |d| { d.interval(Duration::from_millis(10)); Ok(()) },
+        |d| {
+            d.interval(Duration::from_millis(10));
+            Ok(())
+        },
         |_| Ok(ControlFlow::Continue),
-    )).unwrap();
+    ))
+    .unwrap();
 
     exec.run_n(3).unwrap();
     assert_eq!(mon.pre.load(Ordering::SeqCst), 3);

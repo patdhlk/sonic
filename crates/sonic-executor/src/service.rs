@@ -182,7 +182,13 @@ where
             None => Ok(None),
             Some(active) => {
                 let req = *active;
-                Ok(Some((req, ActiveRequest { active, server: self })))
+                Ok(Some((
+                    req,
+                    ActiveRequest {
+                        active,
+                        server: self,
+                    },
+                )))
             }
         }
     }
@@ -210,10 +216,7 @@ where
 {
     /// Send a response by value and notify the client's listener.
     pub fn respond_copy(self, resp: Resp) -> Result<(), ExecutorError> {
-        let sample = self
-            .active
-            .loan_uninit()
-            .map_err(ExecutorError::iceoryx2)?;
+        let sample = self.active.loan_uninit().map_err(ExecutorError::iceoryx2)?;
         let sample = sample.write_payload(resp);
         sample.send().map_err(ExecutorError::iceoryx2)?;
         self.server
@@ -258,10 +261,7 @@ where
     /// Send a request by value. Returns a `PendingRequest` handle for receiving
     /// the response(s), and notifies the server's listener.
     pub fn send_copy(&self, req: Req) -> Result<PendingRequest<Req, Resp>, ExecutorError> {
-        let pending = self
-            .inner
-            .send_copy(req)
-            .map_err(ExecutorError::iceoryx2)?;
+        let pending = self.inner.send_copy(req).map_err(ExecutorError::iceoryx2)?;
         self.req_notifier
             .notify()
             .map_err(ExecutorError::iceoryx2)?;

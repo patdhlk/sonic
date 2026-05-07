@@ -128,7 +128,11 @@ impl Pool {
             handles.push(h);
         }
         Ok(Self {
-            mode: PoolMode::Threaded { tx, handles, shutdown },
+            mode: PoolMode::Threaded {
+                tx,
+                handles,
+                shutdown,
+            },
             tracker,
         })
     }
@@ -162,7 +166,12 @@ impl Pool {
 
 impl Drop for Pool {
     fn drop(&mut self) {
-        if let PoolMode::Threaded { shutdown, handles, tx } = &mut self.mode {
+        if let PoolMode::Threaded {
+            shutdown,
+            handles,
+            tx,
+        } = &mut self.mode
+        {
             shutdown.store(true, Ordering::Release);
             // Replace tx with a fresh closed channel so the original Sender is
             // dropped here. That makes recv on workers return Err(_) and lets

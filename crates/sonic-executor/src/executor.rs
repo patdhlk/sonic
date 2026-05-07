@@ -7,11 +7,11 @@
 
 use crate::context::Stoppable;
 use crate::error::ExecutorError;
-use crate::shutdown;
 use crate::item::ExecutableItem;
 use crate::monitor::{ExecutionMonitor, NoopMonitor};
 use crate::observer::{NoopObserver, Observer};
 use crate::pool::Pool;
+use crate::shutdown;
 use crate::task_id::TaskId;
 use crate::task_kind::TaskKind;
 use crate::thread_attrs::ThreadAttributes;
@@ -93,11 +93,11 @@ impl Executor {
     }
 
     /// Add an item to the executor with an auto-generated id.
-    pub fn add(
-        &mut self,
-        item: impl ExecutableItem,
-    ) -> Result<TaskId, ExecutorError> {
-        let id = TaskId::new(format!("task-{}", self.next_id.fetch_add(1, Ordering::SeqCst)));
+    pub fn add(&mut self, item: impl ExecutableItem) -> Result<TaskId, ExecutorError> {
+        let id = TaskId::new(format!(
+            "task-{}",
+            self.next_id.fetch_add(1, Ordering::SeqCst)
+        ));
         self.add_with_id(id, item)
     }
 
@@ -128,9 +128,14 @@ impl Executor {
         I: ExecutableItem,
         C: IntoIterator<Item = I>,
     {
-        let id = TaskId::new(format!("chain-{}", self.next_id.fetch_add(1, Ordering::SeqCst)));
-        let boxed: Vec<Box<dyn ExecutableItem>> =
-            items.into_iter().map(|i| Box::new(i) as Box<dyn ExecutableItem>).collect();
+        let id = TaskId::new(format!(
+            "chain-{}",
+            self.next_id.fetch_add(1, Ordering::SeqCst)
+        ));
+        let boxed: Vec<Box<dyn ExecutableItem>> = items
+            .into_iter()
+            .map(|i| Box::new(i) as Box<dyn ExecutableItem>)
+            .collect();
         self.add_chain_with_id_boxed(id, boxed)
     }
 
@@ -144,8 +149,10 @@ impl Executor {
         I: ExecutableItem,
         C: IntoIterator<Item = I>,
     {
-        let boxed: Vec<Box<dyn ExecutableItem>> =
-            items.into_iter().map(|i| Box::new(i) as Box<dyn ExecutableItem>).collect();
+        let boxed: Vec<Box<dyn ExecutableItem>> = items
+            .into_iter()
+            .map(|i| Box::new(i) as Box<dyn ExecutableItem>)
+            .collect();
         self.add_chain_with_id_boxed(id.into(), boxed)
     }
 
@@ -297,9 +304,7 @@ impl ExecutorBuilder {
             .create::<ipc::Service>()
             .map_err(ExecutorError::iceoryx2)?;
 
-        let n_workers = self
-            .worker_threads
-            .unwrap_or_else(num_cpus::get_physical);
+        let n_workers = self.worker_threads.unwrap_or_else(num_cpus::get_physical);
         let pool = Arc::new(Pool::new(n_workers, self.worker_attrs)?);
 
         // Build the internal stop event service with a unique-per-process name
@@ -335,8 +340,7 @@ impl ExecutorBuilder {
         // from the moment the executor is built.
         let stoppable = Stoppable::with_waker(stop_notifier);
 
-        let observer: Arc<dyn Observer> =
-            self.observer.unwrap_or_else(|| Arc::new(NoopObserver));
+        let observer: Arc<dyn Observer> = self.observer.unwrap_or_else(|| Arc::new(NoopObserver));
 
         let monitor: Arc<dyn ExecutionMonitor> =
             self.monitor.unwrap_or_else(|| Arc::new(NoopMonitor));
@@ -365,7 +369,7 @@ impl ExecutorBuilder {
 
 impl Executor {
     /// Run the executor until [`Stoppable::stop`] is called or a task signals
-    /// stop via [`Context::stop_executor`].
+    /// stop via [`crate::Context::stop_executor`].
     pub fn run(&mut self) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Forever)
     }
@@ -382,10 +386,7 @@ impl Executor {
 
     /// Run until `predicate()` returns true. Checked after each `WaitSet`
     /// wakeup.
-    pub fn run_until<F: FnMut() -> bool>(
-        &mut self,
-        mut predicate: F,
-    ) -> Result<(), ExecutorError> {
+    pub fn run_until<F: FnMut() -> bool>(&mut self, mut predicate: F) -> Result<(), ExecutorError> {
         self.run_inner(RunMode::Predicate(&mut predicate))
     }
 }
@@ -452,8 +453,7 @@ impl Executor {
                         // waitset are stack-local and dropped together at the
                         // end of dispatch_loop.  Guards are dropped before
                         // listener_storage below.
-                        let l_ref: &crate::trigger::RawListener =
-                            unsafe { &*(l_ref as *const _) };
+                        let l_ref: &crate::trigger::RawListener = unsafe { &*(l_ref as *const _) };
                         let guard = waitset
                             .attach_notification(l_ref)
                             .map_err(ExecutorError::iceoryx2)?;
@@ -471,8 +471,7 @@ impl Executor {
                         let l = Arc::clone(listener);
                         listener_storage.push(l);
                         let l_ref = listener_storage.last().unwrap().as_ref();
-                        let l_ref: &crate::trigger::RawListener =
-                            unsafe { &*(l_ref as *const _) };
+                        let l_ref: &crate::trigger::RawListener = unsafe { &*(l_ref as *const _) };
                         let guard = waitset
                             .attach_deadline(l_ref, *deadline)
                             .map_err(ExecutorError::iceoryx2)?;
@@ -483,8 +482,7 @@ impl Executor {
                         let l = Arc::clone(listener);
                         listener_storage.push(l);
                         let l_ref = listener_storage.last().unwrap().as_ref();
-                        let l_ref: &crate::trigger::RawListener =
-                            unsafe { &*(l_ref as *const _) };
+                        let l_ref: &crate::trigger::RawListener = unsafe { &*(l_ref as *const _) };
                         let guard = waitset
                             .attach_notification(l_ref)
                             .map_err(ExecutorError::iceoryx2)?;
@@ -577,8 +575,7 @@ impl Executor {
                                 let app_inst = item_box.app_instance_id();
                                 // SAFETY: SendItemPtr safety doc above. barrier()
                                 // guarantees exclusive access within each iteration.
-                                let item_ptr =
-                                    SendItemPtr::new(item_box.as_mut() as *mut _);
+                                let item_ptr = SendItemPtr::new(item_box.as_mut() as *mut _);
                                 pool.submit(move || {
                                     let mut ctx =
                                         crate::context::Context::new(&id, &stop, obs.as_ref());
@@ -596,10 +593,7 @@ impl Executor {
                                     // iteration.
                                     let started = std::time::Instant::now();
                                     mon.pre_execute(id.clone(), started);
-                                    let res = run_item_catch_unwind(
-                                        unsafe { &mut *raw },
-                                        &mut ctx,
-                                    );
+                                    let res = run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
                                     let took = started.elapsed();
                                     mon.post_execute(id.clone(), started, took, res.is_ok());
                                     if let Err(ref e) = res {
@@ -624,7 +618,9 @@ impl Executor {
                                 pool.submit(move || {
                                     let mut ctx =
                                         crate::context::Context::new(&id, &stop, obs.as_ref());
-                                    for (ptr, (app_id, app_inst)) in item_ptrs.into_iter().zip(item_meta) {
+                                    for (ptr, (app_id, app_inst)) in
+                                        item_ptrs.into_iter().zip(item_meta)
+                                    {
                                         if let Some(aid) = app_id {
                                             obs.on_app_start(id.clone(), aid, app_inst);
                                         }
@@ -634,10 +630,8 @@ impl Executor {
                                         let raw = ptr.get();
                                         let started = std::time::Instant::now();
                                         mon.pre_execute(id.clone(), started);
-                                        let res = run_item_catch_unwind(
-                                            unsafe { &mut *raw },
-                                            &mut ctx,
-                                        );
+                                        let res =
+                                            run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
                                         let took = started.elapsed();
                                         mon.post_execute(id.clone(), started, took, res.is_ok());
                                         if let Err(ref e) = res {
@@ -650,11 +644,7 @@ impl Executor {
                                             Ok(crate::ControlFlow::Continue) => {}
                                             Ok(crate::ControlFlow::StopChain) => break,
                                             Err(_) => {
-                                                record_first_err(
-                                                    &err_slot,
-                                                    &id,
-                                                    res,
-                                                );
+                                                record_first_err(&err_slot, &id, res);
                                                 break;
                                             }
                                         }
@@ -670,7 +660,10 @@ impl Executor {
                                 if let Some(source) = outcome.error {
                                     let mut g = err_slot.lock().unwrap();
                                     if g.is_none() {
-                                        *g = Some(ExecutorError::Item { task_id: id.clone(), source });
+                                        *g = Some(ExecutorError::Item {
+                                            task_id: id.clone(),
+                                            source,
+                                        });
                                     }
                                 }
                                 let _ = outcome.stopped_chain; // chain-abort semantics: no extra bookkeeping at task level
@@ -765,8 +758,8 @@ fn run_item_catch_unwind(
     item: &mut dyn ExecutableItem,
     ctx: &mut crate::context::Context<'_>,
 ) -> crate::ExecuteResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| item.execute(ctx)))
-        .unwrap_or_else(|payload| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| item.execute(ctx))).unwrap_or_else(
+        |payload| {
             let msg = if let Some(s) = payload.downcast_ref::<&str>() {
                 (*s).to_string()
             } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -775,7 +768,8 @@ fn run_item_catch_unwind(
                 "panicked task".to_string()
             };
             Err::<crate::ControlFlow, crate::ItemError>(Box::new(PanickedTask(msg)))
-        })
+        },
+    )
 }
 
 /// Public-within-crate wrapper so `graph.rs` can call `run_item_catch_unwind`
@@ -842,7 +836,10 @@ impl ExecutorGraphBuilder<'_> {
     pub fn build(self) -> Result<TaskId, ExecutorError> {
         let g = self.builder.finish()?;
         let id = self.custom_id.unwrap_or_else(|| {
-            TaskId::new(format!("graph-{}", self.executor.next_id.fetch_add(1, Ordering::SeqCst)))
+            TaskId::new(format!(
+                "graph-{}",
+                self.executor.next_id.fetch_add(1, Ordering::SeqCst)
+            ))
         });
         let decls = g.decls.clone();
         self.executor.tasks.push(TaskEntry {

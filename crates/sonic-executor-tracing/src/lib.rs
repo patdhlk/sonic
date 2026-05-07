@@ -1,4 +1,4 @@
-//! `tracing`-based [`Observer`](sonic_executor::Observer).
+//! `tracing`-based [`Observer`].
 //!
 //! Pass `Arc::new(TracingObserver::default())` to
 //! [`ExecutorBuilder::observer`](sonic_executor::ExecutorBuilder)

@@ -24,10 +24,7 @@ impl sonic_executor::ExecutableItem for Consumer {
         Ok(())
     }
 
-    fn execute(
-        &mut self,
-        _ctx: &mut sonic_executor::Context<'_>,
-    ) -> sonic_executor::ExecuteResult {
+    fn execute(&mut self, _ctx: &mut sonic_executor::Context<'_>) -> sonic_executor::ExecuteResult {
         while let Some(s) = self
             .sub
             .take()

@@ -89,11 +89,14 @@ impl Runner {
             let _ = self.start();
         }
         self.stop.stop();
-        self.handle.take().map_or_else(|| Ok(()), |handle| match handle.join() {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(ExecutorError::RunnerJoin),
-        })
+        self.handle.take().map_or_else(
+            || Ok(()),
+            |handle| match handle.join() {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err(ExecutorError::RunnerJoin),
+            },
+        )
     }
 
     /// Get a [`Stoppable`] for sharing into other threads.
@@ -122,17 +125,16 @@ fn clone_executor_error(e: &ExecutorError) -> ExecutorError {
     // Errors don't impl Clone (ItemError is dyn Error); we synthesise an
     // equivalent description.
     match e {
-        ExecutorError::Iceoryx2(s)        => ExecutorError::Iceoryx2(s.clone()),
-        ExecutorError::InvalidGraph(s)    => ExecutorError::InvalidGraph(s.clone()),
+        ExecutorError::Iceoryx2(s) => ExecutorError::Iceoryx2(s.clone()),
+        ExecutorError::InvalidGraph(s) => ExecutorError::InvalidGraph(s.clone()),
         ExecutorError::DeclareTriggers(s) => ExecutorError::DeclareTriggers(s.clone()),
-        ExecutorError::Item { task_id, source } =>
-            ExecutorError::Item {
-                task_id: task_id.clone(),
-                source: Box::new(StringError(source.to_string())),
-            },
+        ExecutorError::Item { task_id, source } => ExecutorError::Item {
+            task_id: task_id.clone(),
+            source: Box::new(StringError(source.to_string())),
+        },
         ExecutorError::AlreadyRunning => ExecutorError::AlreadyRunning,
-        ExecutorError::RunnerJoin     => ExecutorError::RunnerJoin,
-        ExecutorError::Builder(s)     => ExecutorError::Builder(s.clone()),
+        ExecutorError::RunnerJoin => ExecutorError::RunnerJoin,
+        ExecutorError::Builder(s) => ExecutorError::Builder(s.clone()),
     }
 }
 

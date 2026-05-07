@@ -38,6 +38,8 @@ fn server_receives_request_via_listener() {
 
     let (req, active) = server.take_request().unwrap().expect("request");
     #[allow(clippy::float_cmp)]
-    { assert_eq!(req.0, 16.0) }
+    {
+        assert_eq!(req.0, 16.0);
+    }
     active.respond_copy(Resp(4.0)).unwrap();
 }

@@ -13,10 +13,7 @@ use crate::trigger::TriggerDeclarer;
 pub trait ExecutableItem: Send + 'static {
     /// Called once when the item is added to an executor. The implementor
     /// registers its trigger handles via the [`TriggerDeclarer`].
-    fn declare_triggers(
-        &mut self,
-        d: &mut TriggerDeclarer<'_>,
-    ) -> Result<(), ExecutorError> {
+    fn declare_triggers(&mut self, d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         let _ = d;
         Ok(())
     }
@@ -44,12 +41,9 @@ pub trait ExecutableItem: Send + 'static {
 // ── Blanket impl for boxed trait objects ─────────────────────────────────────
 
 /// Allows `Vec<Box<dyn ExecutableItem>>` to be passed directly to
-/// [`Executor::add_chain`] without a secondary wrapper.
+/// [`crate::Executor::add_chain`] without a secondary wrapper.
 impl ExecutableItem for Box<dyn ExecutableItem> {
-    fn declare_triggers(
-        &mut self,
-        d: &mut TriggerDeclarer<'_>,
-    ) -> Result<(), ExecutorError> {
+    fn declare_triggers(&mut self, d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         (**self).declare_triggers(d)
     }
 
@@ -107,10 +101,7 @@ where
     D: FnOnce(&mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> + Send + 'static,
     E: FnMut(&mut Context<'_>) -> ExecuteResult + Send + 'static,
 {
-    fn declare_triggers(
-        &mut self,
-        d: &mut TriggerDeclarer<'_>,
-    ) -> Result<(), ExecutorError> {
+    fn declare_triggers(&mut self, d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         self.declare.take().map_or_else(|| Ok(()), |decl| decl(d))
     }
 
@@ -176,7 +167,10 @@ mod tests {
         it.declare_triggers(&mut declarer_storage).unwrap();
         it.declare_triggers(&mut declarer_storage).unwrap();
 
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1,
-                   "declare closure must be invoked at most once");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "declare closure must be invoked at most once"
+        );
     }
 }

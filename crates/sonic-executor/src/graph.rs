@@ -13,8 +13,8 @@ pub struct Vertex(pub(crate) usize);
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) struct Graph {
     pub(crate) items: Vec<Box<dyn ExecutableItem>>,
-    pub(crate) successors: Vec<Vec<usize>>,    // adjacency list
-    pub(crate) in_degree: Vec<usize>,           // initial in-degree
+    pub(crate) successors: Vec<Vec<usize>>, // adjacency list
+    pub(crate) in_degree: Vec<usize>,       // initial in-degree
     pub(crate) root: usize,
     pub(crate) decls: Vec<TriggerDecl>,
 }
@@ -39,7 +39,11 @@ pub struct GraphBuilder {
 
 impl GraphBuilder {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new(), edges: Vec::new(), root: None }
+        Self {
+            items: Vec::new(),
+            edges: Vec::new(),
+            root: None,
+        }
     }
 
     /// Add a vertex; returns its handle.
@@ -71,17 +75,23 @@ impl GraphBuilder {
             .root
             .ok_or_else(|| ExecutorError::InvalidGraph("no root vertex set".into()))?;
         if root >= n {
-            return Err(ExecutorError::InvalidGraph("root index out of bounds".into()));
+            return Err(ExecutorError::InvalidGraph(
+                "root index out of bounds".into(),
+            ));
         }
 
         let mut successors = vec![Vec::<usize>::new(); n];
         let mut in_degree = vec![0_usize; n];
         for &(from, to) in &self.edges {
             if from >= n || to >= n {
-                return Err(ExecutorError::InvalidGraph("edge index out of bounds".into()));
+                return Err(ExecutorError::InvalidGraph(
+                    "edge index out of bounds".into(),
+                ));
             }
             if from == to {
-                return Err(ExecutorError::InvalidGraph("self-loops are not allowed".into()));
+                return Err(ExecutorError::InvalidGraph(
+                    "self-loops are not allowed".into(),
+                ));
             }
             successors[from].push(to);
             in_degree[to] += 1;
@@ -112,7 +122,9 @@ impl GraphBuilder {
         let mut reach = vec![false; n];
         let mut stack = vec![root];
         while let Some(u) = stack.pop() {
-            if reach[u] { continue; }
+            if reach[u] {
+                continue;
+            }
             reach[u] = true;
             for &v in &successors[u] {
                 stack.push(v);
@@ -131,7 +143,9 @@ impl GraphBuilder {
 
         // Warn if non-root vertices declared triggers (ignored).
         for (i, body) in self.items.iter_mut().enumerate() {
-            if i == root { continue; }
+            if i == root {
+                continue;
+            }
             let mut spurious = TriggerDeclarer::new_internal();
             let _ = body.declare_triggers(&mut spurious);
             if !spurious.is_empty() {
@@ -259,7 +273,11 @@ impl Graph {
             .collect();
 
         let runtime = Arc::new(GraphRuntime {
-            items: self.items.iter_mut().map(|b| VertexPtr(std::ptr::from_mut(b.as_mut()))).collect(),
+            items: self
+                .items
+                .iter_mut()
+                .map(|b| VertexPtr(std::ptr::from_mut(b.as_mut())))
+                .collect(),
             succ: self.successors.clone(),
             counters,
             pending: AtomicUsize::new(n),
@@ -296,10 +314,13 @@ impl Graph {
                         runtime.finalise_skipped(i);
                         return;
                     }
-                    let mut ctx = crate::context::Context::new(&task_id, &stop, runtime.observer.as_ref());
+                    let mut ctx =
+                        crate::context::Context::new(&task_id, &stop, runtime.observer.as_ref());
                     let ptr = runtime.items[i].0;
                     if let Some(aid) = app_id {
-                        runtime.observer.on_app_start(task_id.clone(), aid, app_inst);
+                        runtime
+                            .observer
+                            .on_app_start(task_id.clone(), aid, app_inst);
                     }
                     let started = std::time::Instant::now();
                     runtime.monitor.pre_execute(task_id.clone(), started);
@@ -311,7 +332,9 @@ impl Graph {
                         &mut ctx,
                     );
                     let took = started.elapsed();
-                    runtime.monitor.post_execute(task_id.clone(), started, took, res.is_ok());
+                    runtime
+                        .monitor
+                        .post_execute(task_id.clone(), started, took, res.is_ok());
                     if let Err(ref e) = res {
                         runtime.observer.on_app_error(task_id.clone(), e.as_ref());
                     }
@@ -376,7 +399,12 @@ impl Graph {
                 drop(guard);
                 break;
             }
-            drop(condvar.wait_timeout(guard, std::time::Duration::from_millis(5)).unwrap().0);
+            drop(
+                condvar
+                    .wait_timeout(guard, std::time::Duration::from_millis(5))
+                    .unwrap()
+                    .0,
+            );
         }
         // Final drain.
         while ready_rx.try_recv().is_ok() {}
@@ -433,10 +461,10 @@ mod tests {
     #[allow(clippy::many_single_char_names)]
     fn diamond_graph_builds() {
         let mut b = GraphBuilder::new();
-        let r  = b.vertex(item(|_| Ok(ControlFlow::Continue)));
-        let l  = b.vertex(item(|_| Ok(ControlFlow::Continue)));
+        let r = b.vertex(item(|_| Ok(ControlFlow::Continue)));
+        let l = b.vertex(item(|_| Ok(ControlFlow::Continue)));
         let rt = b.vertex(item(|_| Ok(ControlFlow::Continue)));
-        let m  = b.vertex(item(|_| Ok(ControlFlow::Continue)));
+        let m = b.vertex(item(|_| Ok(ControlFlow::Continue)));
         b.edge(r, l).edge(r, rt).edge(l, m).edge(rt, m).root(r);
         let g = b.finish().expect("diamond");
         assert_eq!(g.successors[r.0], vec![l.0, rt.0]);

@@ -70,11 +70,8 @@ mod inner {
         // passing it. Failure (e.g. no CAP_SYS_NICE) is silently ignored.
         unsafe {
             (*param.as_mut_ptr()).sched_priority = prio;
-            let _ = libc::pthread_setschedparam(
-                libc::pthread_self(),
-                libc::SCHED_FIFO,
-                param.as_ptr(),
-            );
+            let _ =
+                libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, param.as_ptr());
         }
     }
 }

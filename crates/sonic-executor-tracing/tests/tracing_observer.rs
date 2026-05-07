@@ -21,7 +21,10 @@ fn tracing_observer_runs_without_panic() {
             .build()
             .unwrap();
         exec.add(item_with_triggers(
-            |d| { d.interval(Duration::from_millis(10)); Ok(()) },
+            |d| {
+                d.interval(Duration::from_millis(10));
+                Ok(())
+            },
             |ctx| {
                 ctx.send_event(UserEvent {
                     kind: 1,
@@ -30,7 +33,8 @@ fn tracing_observer_runs_without_panic() {
                 });
                 Ok(ControlFlow::Continue)
             },
-        )).unwrap();
+        ))
+        .unwrap();
         exec.run_n(1).unwrap();
     });
 }

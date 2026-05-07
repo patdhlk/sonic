@@ -1,4 +1,4 @@
-//! Return type for [`ExecutableItem::execute`].
+//! Return type for [`crate::ExecutableItem::execute`].
 
 use crate::error::ItemError;
 
@@ -11,5 +11,5 @@ pub enum ControlFlow {
     StopChain,
 }
 
-/// Return type of [`ExecutableItem::execute`].
+/// Return type of [`crate::ExecutableItem::execute`].
 pub type ExecuteResult = Result<ControlFlow, ItemError>;

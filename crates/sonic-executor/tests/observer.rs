@@ -16,8 +16,12 @@ struct CountingObserver {
 }
 
 impl Observer for CountingObserver {
-    fn on_executor_up(&self) { self.up.fetch_add(1, Ordering::SeqCst); }
-    fn on_executor_down(&self) { self.down.fetch_add(1, Ordering::SeqCst); }
+    fn on_executor_up(&self) {
+        self.up.fetch_add(1, Ordering::SeqCst);
+    }
+    fn on_executor_down(&self) {
+        self.down.fetch_add(1, Ordering::SeqCst);
+    }
     fn on_executor_error(&self, _: &sonic_executor::ExecutorError) {
         self.err.fetch_add(1, Ordering::SeqCst);
     }
@@ -42,14 +46,17 @@ impl sonic_executor::ExecutableItem for AppItem {
         d.interval(Duration::from_millis(10));
         Ok(())
     }
-    fn execute(
-        &mut self,
-        ctx: &mut sonic_executor::Context<'_>,
-    ) -> sonic_executor::ExecuteResult {
-        ctx.send_event(UserEvent { kind: 1, int_data: 42, string_data: None });
+    fn execute(&mut self, ctx: &mut sonic_executor::Context<'_>) -> sonic_executor::ExecuteResult {
+        ctx.send_event(UserEvent {
+            kind: 1,
+            int_data: 42,
+            string_data: None,
+        });
         Ok(ControlFlow::Continue)
     }
-    fn app_id(&self) -> Option<u32> { Some(7) }
+    fn app_id(&self) -> Option<u32> {
+        Some(7)
+    }
 }
 
 #[test]
@@ -68,5 +75,10 @@ fn observer_sees_lifecycle_and_user_events() {
     assert_eq!(obs.down.load(Ordering::SeqCst), 1);
     assert!(obs.start.load(Ordering::SeqCst) >= 1);
     assert!(obs.stop.load(Ordering::SeqCst) >= 1);
-    assert!(obs.user_events.lock().unwrap().iter().any(|e| e.int_data == 42));
+    assert!(obs
+        .user_events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| e.int_data == 42));
 }

@@ -129,12 +129,21 @@ fn threaded_pool_executes_items_correctly() {
     let c = Arc::clone(&counter);
 
     exec.add(item_with_triggers(
-        |d| { d.interval(Duration::from_millis(20)); Ok(()) },
-        move |_| { c.fetch_add(1, Ordering::SeqCst); Ok(ControlFlow::Continue) },
+        |d| {
+            d.interval(Duration::from_millis(20));
+            Ok(())
+        },
+        move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok(ControlFlow::Continue)
+        },
     ))
     .unwrap();
 
     exec.run_n(5).unwrap();
-    assert_eq!(counter.load(Ordering::SeqCst), 5,
-        "threaded pool should fire item exactly 5 times under run_n(5)");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        5,
+        "threaded pool should fire item exactly 5 times under run_n(5)"
+    );
 }

@@ -171,7 +171,9 @@ mod tests {
     fn collects_interval_decl() {
         let mut d = TriggerDeclarer::new_test();
         d.interval(Duration::from_millis(100));
-        assert!(matches!(d.decls[0], TriggerDecl::Interval(dur) if dur == Duration::from_millis(100)));
+        assert!(
+            matches!(d.decls[0], TriggerDecl::Interval(dur) if dur == Duration::from_millis(100))
+        );
     }
 
     #[test]

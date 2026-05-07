@@ -18,7 +18,8 @@ struct Msg(u64);
 fn publisher_send_notifies_subscriber_listener() {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
 
-    let channel: Arc<Channel<Msg>> = Channel::open_or_create(&node, &unique("sonic.test.chan")).unwrap();
+    let channel: Arc<Channel<Msg>> =
+        Channel::open_or_create(&node, &unique("sonic.test.chan")).unwrap();
 
     let publisher = channel.publisher().unwrap();
     let subscriber = channel.subscriber().unwrap();
