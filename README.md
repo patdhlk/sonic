@@ -51,6 +51,24 @@ Pre-1.0. APIs may change. See `docs/superpowers/specs/` for the design notes (gi
 | `thread_attrs`   | off     | Core affinity + scheduling priority knobs. |
 | `ctrlc-default`  | on      | SIGINT → `Stoppable::stop`.                |
 
+## Silencing iceoryx2 logs
+
+iceoryx2 logs warnings (e.g. `FailedToDeliverSignal` under high publish rates) to its
+internal logger. To silence them, call `set_log_level` once at startup before any
+iceoryx2 service is created:
+
+```rust
+use iceoryx2::prelude::{set_log_level, LogLevel};
+
+fn main() {
+    set_log_level(LogLevel::Error);
+    // ... rest of your application
+}
+```
+
+Setting `IOX2_LOG_LEVEL=error` alone has no effect unless your application also
+calls `iceoryx2::prelude::set_log_level_from_env_or_default()` at startup.
+
 ## License
 
 Apache-2.0 OR MIT.
