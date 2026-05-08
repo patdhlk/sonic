@@ -16,7 +16,6 @@ fn tracing_observer_runs_without_panic() {
         let obs: Arc<dyn Observer> = Arc::new(TracingObserver);
         let mut exec = Executor::builder()
             .worker_threads(0)
-            .install_ctrlc(false)
             .observer(obs)
             .build()
             .unwrap();

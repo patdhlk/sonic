@@ -32,7 +32,6 @@ mod payload;
 mod pool;
 mod runner;
 mod service;
-mod shutdown;
 pub mod signal_slot;
 mod task_id;
 mod task_kind;

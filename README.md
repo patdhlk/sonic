@@ -49,9 +49,12 @@ Pre-1.0. APIs may change. See `docs/superpowers/specs/` for the design notes (gi
 |------------------|---------|--------------------------------------------|
 | `tracing`        | off     | Add `Observer` integration target.         |
 | `thread_attrs`   | off     | Core affinity + scheduling priority knobs. |
-| `ctrlc-default`  | on      | SIGINT → `Stoppable::stop`.                |
 
 ## Silencing iceoryx2 logs
+
+Ctrl-C / SIGINT and SIGTERM are handled natively by iceoryx2's `Node` —
+the executor's `run()` loop returns cleanly when either signal arrives.
+You don't need to install your own signal handler.
 
 iceoryx2 logs warnings (e.g. `FailedToDeliverSignal` under high publish rates) to its
 internal logger. To silence them, call `set_log_level` once at startup before any

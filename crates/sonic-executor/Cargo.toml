@@ -18,16 +18,14 @@ num_cpus          = { workspace = true }
 
 tracing       = { workspace = true, optional = true }
 core_affinity = { workspace = true, optional = true }
-ctrlc         = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 
 [features]
-default      = ["ctrlc"]
+default      = []
 tracing      = ["dep:tracing"]
 thread_attrs = ["dep:core_affinity", "dep:libc"]
-ctrlc        = ["dep:ctrlc"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", optional = true }

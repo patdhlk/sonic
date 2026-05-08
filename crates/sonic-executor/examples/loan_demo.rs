@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Silence iceoryx2 warnings.
     set_log_level(LogLevel::Error);
 
-    let mut exec = Executor::builder().worker_threads(2).install_ctrlc(false).build()?;
+    let mut exec = Executor::builder().worker_threads(2).build()?;
     let topic = format!("sonic.demo.loan.{}", std::process::id());
     let ch: Arc<Channel<Big>> = Channel::open_or_create(exec.iceoryx_node(), &topic)?;
     let publisher = ch.publisher()?;

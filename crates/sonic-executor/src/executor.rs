@@ -13,7 +13,6 @@ use crate::monitor::{ExecutionMonitor, NoopMonitor};
 use crate::observer::{NoopObserver, Observer};
 use crate::payload::Payload;
 use crate::pool::Pool;
-use crate::shutdown;
 use crate::task_id::TaskId;
 use crate::task_kind::TaskKind;
 use crate::thread_attrs::ThreadAttributes;
@@ -22,6 +21,7 @@ use iceoryx2::node::Node;
 use iceoryx2::port::listener::Listener as IxListener;
 use iceoryx2::prelude::ipc;
 use iceoryx2::prelude::*;
+use iceoryx2::waitset::WaitSetRunResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -236,9 +236,6 @@ pub struct ExecutorBuilder {
     observer: Option<Arc<dyn Observer>>,
     monitor: Option<Arc<dyn ExecutionMonitor>>,
     worker_attrs: ThreadAttributes,
-    /// Whether to install a process-wide Ctrl-C → [`Stoppable::stop`] bridge.
-    /// Defaults to `true` when the `ctrlc` feature is enabled.
-    install_ctrlc: bool,
 }
 
 impl Default for ExecutorBuilder {
@@ -248,7 +245,6 @@ impl Default for ExecutorBuilder {
             observer: None,
             monitor: None,
             worker_attrs: ThreadAttributes::new(),
-            install_ctrlc: cfg!(feature = "ctrlc"),
         }
     }
 }
@@ -283,16 +279,6 @@ impl ExecutorBuilder {
     #[allow(clippy::missing_const_for_fn)]
     pub fn worker_attrs(mut self, attrs: ThreadAttributes) -> Self {
         self.worker_attrs = attrs;
-        self
-    }
-
-    /// Override whether to install a process-wide Ctrl-C handler that calls
-    /// [`Stoppable::stop`] on SIGINT. Has no effect if the `ctrlc`
-    /// feature is disabled (the handler is never installed regardless). Pass
-    /// `false` if you want to handle SIGINT yourself.
-    #[must_use]
-    pub const fn install_ctrlc(mut self, yes: bool) -> Self {
-        self.install_ctrlc = yes;
         self
     }
 
@@ -364,10 +350,6 @@ impl ExecutorBuilder {
             observer,
             monitor,
         };
-
-        if self.install_ctrlc {
-            shutdown::install_ctrlc(exec.stoppable.clone())?;
-        }
 
         Ok(exec)
     }
@@ -738,7 +720,16 @@ impl Executor {
                 },
             );
 
-            cb_result.map_err(ExecutorError::iceoryx2)?;
+            let cb_result = cb_result.map_err(ExecutorError::iceoryx2)?;
+
+            // iceoryx2's WaitSet catches SIGINT/SIGTERM internally; honor that
+            // here for a clean exit.
+            if matches!(
+                cb_result,
+                WaitSetRunResult::Interrupt | WaitSetRunResult::TerminationRequest
+            ) {
+                return Ok(());
+            }
 
             // Extract the error before dropping the MutexGuard — avoids
             // holding the lock across the return (clippy::significant_drop_in_scrutinee).
