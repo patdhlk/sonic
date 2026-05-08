@@ -10,11 +10,17 @@ use iceoryx2::prelude::ZeroCopySend;
 
 /// Marker trait for types that can be carried over a [`Channel<T>`](crate::Channel)
 /// or [`Service<Req, Resp>`](crate::Service) — i.e., types that are
-/// `ZeroCopySend + Default + Debug + 'static`.
+/// `ZeroCopySend + Debug + 'static`.
+///
+/// `Default` is **not** required by the trait; it is only needed by
+/// [`Publisher::loan_send`](crate::Publisher::loan_send), which initialises the
+/// shared-memory slot via `T::default()` before handing it to the caller's
+/// closure. If your type does not implement `Default`, use
+/// [`Publisher::loan`](crate::Publisher::loan) instead.
 #[diagnostic::on_unimplemented(
-    note = "`{Self}` must derive `ZeroCopySend`, `Debug`, and `Default`.",
-    note = "Add `#[derive(Debug, Default, ZeroCopySend)] #[repr(C)]` and the trait will be implemented automatically."
+    note = "`{Self}` must derive `ZeroCopySend` and `Debug`.",
+    note = "Add `#[derive(Debug, ZeroCopySend)] #[repr(C)]` and the trait will be implemented automatically."
 )]
-pub trait Payload: ZeroCopySend + Default + core::fmt::Debug + 'static {}
+pub trait Payload: ZeroCopySend + core::fmt::Debug + 'static {}
 
-impl<T> Payload for T where T: ZeroCopySend + Default + core::fmt::Debug + 'static {}
+impl<T> Payload for T where T: ZeroCopySend + core::fmt::Debug + 'static {}

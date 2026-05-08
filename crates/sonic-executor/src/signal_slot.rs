@@ -26,7 +26,7 @@ pub enum TakePolicy {
 }
 
 /// Open a fresh signal/slot pair backed by a `Channel<T>`.
-pub fn pair<T: Payload + Copy + Send>(
+pub fn pair<T: Payload + Default + Copy + Send>(
     exec: &mut Executor,
     topic: &str,
 ) -> Result<(SignalItem<T>, SlotItem<T>), ExecutorError> {
@@ -50,13 +50,13 @@ pub fn pair<T: Payload + Copy + Send>(
 
 /// Signal half of a signal/slot pair: an [`ExecutableItem`] that, when fired,
 /// publishes a message on the underlying channel.
-pub struct SignalItem<T: Payload + Copy + Send> {
+pub struct SignalItem<T: Payload + Default + Copy + Send> {
     publisher: Publisher<T>,
     before_send: BeforeSendCb<T>,
     _marker: core::marker::PhantomData<T>,
 }
 
-impl<T: Payload + Copy + Send> SignalItem<T> {
+impl<T: Payload + Default + Copy + Send> SignalItem<T> {
     /// Install a callback invoked just before each send. Returning `false`
     /// skips the send and the `execute` call returns `StopChain`.
     #[must_use]
@@ -69,7 +69,7 @@ impl<T: Payload + Copy + Send> SignalItem<T> {
     }
 }
 
-impl<T: Payload + Copy + Send> ExecutableItem for SignalItem<T> {
+impl<T: Payload + Default + Copy + Send> ExecutableItem for SignalItem<T> {
     fn declare_triggers(&mut self, _d: &mut TriggerDeclarer<'_>) -> Result<(), ExecutorError> {
         Ok(())
     }

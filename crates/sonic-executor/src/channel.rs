@@ -138,8 +138,13 @@ impl<T: Payload> Publisher<T> {
     /// Loan a sample initialised to `T::default()`, run `f` to fill it, then
     /// send + notify. Returns `Ok(false)` if `f` returns `false` — caller
     /// signalled "skip send".
+    ///
+    /// `T: Default` is required here because the shared-memory slot is
+    /// pre-initialised via `T::default()` before the closure runs. For types
+    /// that do not implement `Default`, use [`loan`](Self::loan) instead.
     pub fn loan_send<F>(&self, f: F) -> Result<bool, ExecutorError>
     where
+        T: Default,
         F: FnOnce(&mut T) -> bool,
     {
         let sample = self.inner.loan_uninit().map_err(ExecutorError::iceoryx2)?;
