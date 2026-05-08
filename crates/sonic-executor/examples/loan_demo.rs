@@ -20,9 +20,6 @@ struct Big {
 // `Publisher::loan` constructs the payload directly in shared memory.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Silence iceoryx2 warnings.
-    set_log_level(LogLevel::Error);
-
     let mut exec = Executor::builder().worker_threads(2).build()?;
     let topic = format!("sonic.demo.loan.{}", std::process::id());
     let ch: Arc<Channel<Big>> = Channel::open_or_create(exec.iceoryx_node(), &topic)?;
@@ -39,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move |_| {
             let n = c.fetch_add(1, Ordering::SeqCst);
             // Zero-copy send via loan: closure constructs Big directly in shm.
-            publisher
+            let outcome = publisher
                 .loan(|slot: &mut MaybeUninit<Big>| {
                     slot.write(Big {
                         tag: n,
@@ -48,7 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     true
                 })
                 .map_err(|e| -> ItemError { Box::new(e) })?;
-            println!("[producer] sent tag={n} via loan() (1 KB payload)");
+            println!(
+                "[producer] sent tag={n} via loan() (delivered to {} listeners)",
+                outcome.listeners_notified
+            );
             Ok(ControlFlow::Continue)
         },
     ))?;

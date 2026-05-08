@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         },
         move |_| {
-            publisher
+            let _ = publisher
                 .send_copy(Count(n))
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             n += 1;

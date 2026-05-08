@@ -109,7 +109,7 @@ fn subscriber_trigger_dispatches_task() {
 
     std::thread::spawn(move || {
         for i in 0..5 {
-            publisher.send_copy(Tick(i)).unwrap();
+            let _ = publisher.send_copy(Tick(i));
             std::thread::sleep(Duration::from_millis(20));
         }
     });

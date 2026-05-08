@@ -11,6 +11,42 @@ use iceoryx2::prelude::*;
 use iceoryx2::sample::Sample as IxSample;
 use std::sync::Arc;
 
+/// Outcome of a [`Publisher`] send operation.
+///
+/// Returned by [`Publisher::send_copy`], [`Publisher::loan_send`], and
+/// [`Publisher::loan`]. Inspect `listeners_notified` to detect dropped
+/// notifications: a value smaller than the number of subscribers known to be
+/// attached indicates that at least one listener's kernel socket buffer was
+/// full when the publisher tried to wake it. iceoryx2 will *also* log a
+/// `FailedToDeliverSignal` warning per dropped delivery; this struct lets
+/// callers detect the same condition programmatically without parsing logs.
+///
+/// Note that `listeners_notified == 0` is *not* always a problem — it just
+/// means no listeners were attached at the moment of notification (e.g.
+/// no subscribers exist yet, which is normal during startup).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct NotifyOutcome {
+    /// `true` if the message was published. For `loan_send` and `loan`, this
+    /// reflects the closure's return value: `false` means the closure asked
+    /// to skip the send (no payload was sent and no notification fired).
+    pub sent: bool,
+
+    /// Number of listeners the notification was successfully delivered to.
+    /// Always `0` when `sent == false`. May be less than the expected listener
+    /// count under back-pressure — see the type-level docs.
+    pub listeners_notified: usize,
+}
+
+impl NotifyOutcome {
+    /// Convenience: `true` iff the message was sent AND at least one listener
+    /// was woken. Useful for asserting end-to-end pickup in tests.
+    #[must_use]
+    pub const fn delivered_to_any_listener(self) -> bool {
+        self.sent && self.listeners_notified > 0
+    }
+}
+
 /// Suffix appended to a topic name to form the paired event-service name.
 ///
 /// `Channel<T>` reserves this suffix; users must not open an event service
@@ -105,12 +141,22 @@ unsafe impl<T: core::fmt::Debug + ZeroCopySend + 'static> Send for Publisher<T> 
 
 impl<T: Payload + Copy> Publisher<T> {
     /// Send by value (copies). Notifies the paired event service on success.
-    pub fn send_copy(&self, value: T) -> Result<(), ExecutorError> {
+    ///
+    /// Returns a [`NotifyOutcome`] whose `listeners_notified` field reports how
+    /// many listeners actually received the wakeup. A value less than the
+    /// number of attached subscribers means at least one listener's kernel
+    /// socket buffer was full at notification time (the *data* is still
+    /// delivered — only the wakeup signal was dropped). See [`NotifyOutcome`]
+    /// for guidance on interpreting this value.
+    pub fn send_copy(&self, value: T) -> Result<NotifyOutcome, ExecutorError> {
         self.inner
             .send_copy(value)
             .map_err(ExecutorError::iceoryx2)?;
-        self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
-        Ok(())
+        let listeners_notified = self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
+        Ok(NotifyOutcome {
+            sent: true,
+            listeners_notified,
+        })
     }
 }
 
@@ -131,18 +177,23 @@ impl<T: Payload> Publisher<T> {
     /// let ch: Arc<Channel<Tick>> = Channel::open_or_create(&node, "demo")?;
     /// let publisher = ch.publisher()?;
     ///
-    /// publisher.loan_send(|t: &mut Tick| { t.0 = 1; true })?;
+    /// let _ = publisher.loan_send(|t: &mut Tick| { t.0 = 1; true })?;
     /// # Ok(()) }
     /// ```
     ///
     /// Loan a sample initialised to `T::default()`, run `f` to fill it, then
-    /// send + notify. Returns `Ok(false)` if `f` returns `false` — caller
-    /// signalled "skip send".
+    /// send + notify. Returns a [`NotifyOutcome`] with `sent == false` if `f`
+    /// returns `false` — caller signalled "skip send".
+    ///
+    /// When `sent == true`, `listeners_notified` reports how many listeners
+    /// received the wakeup. A value less than the number of attached subscribers
+    /// means at least one listener's kernel socket buffer was full (dropped
+    /// wakeup — data is still delivered). See [`NotifyOutcome`] for details.
     ///
     /// `T: Default` is required here because the shared-memory slot is
     /// pre-initialised via `T::default()` before the closure runs. For types
     /// that do not implement `Default`, use [`loan`](Self::loan) instead.
-    pub fn loan_send<F>(&self, f: F) -> Result<bool, ExecutorError>
+    pub fn loan_send<F>(&self, f: F) -> Result<NotifyOutcome, ExecutorError>
     where
         T: Default,
         F: FnOnce(&mut T) -> bool,
@@ -151,11 +202,17 @@ impl<T: Payload> Publisher<T> {
         let mut sample = sample.write_payload(T::default());
         let cont = f(sample.payload_mut());
         if !cont {
-            return Ok(false);
+            return Ok(NotifyOutcome {
+                sent: false,
+                listeners_notified: 0,
+            });
         }
         sample.send().map_err(ExecutorError::iceoryx2)?;
-        self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
-        Ok(true)
+        let listeners_notified = self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
+        Ok(NotifyOutcome {
+            sent: true,
+            listeners_notified,
+        })
     }
 
     /// True zero-copy send. The closure receives `&mut MaybeUninit<T>`; it
@@ -163,8 +220,10 @@ impl<T: Payload> Publisher<T> {
     /// or in-place construction such as iceoryx2's `placement_default!`)
     /// before returning `true`. Returning `false` skips the send.
     ///
-    /// On success, sends and notifies. Returns `Ok(true)` if the payload was
-    /// sent, `Ok(false)` if the closure returned false.
+    /// On success, sends and notifies. Returns a [`NotifyOutcome`] with
+    /// `sent == true` if the payload was sent, `sent == false` if the closure
+    /// returned `false`. When `sent == true`, `listeners_notified` reports how
+    /// many listeners received the wakeup — see [`NotifyOutcome`] for details.
     ///
     /// # Contract
     ///
@@ -199,7 +258,7 @@ impl<T: Payload> Publisher<T> {
     /// let ch: Arc<Channel<LargeMsg>> = Channel::open_or_create(&node, "demo")?;
     /// let publisher = ch.publisher()?;
     ///
-    /// publisher.loan(|slot: &mut MaybeUninit<LargeMsg>| {
+    /// let _ = publisher.loan(|slot: &mut MaybeUninit<LargeMsg>| {
     ///     // Initialise directly in shared memory — no Default construction,
     ///     // no stack temporary for the payload array.
     ///     slot.write(LargeMsg { payload: [0u8; 64] });
@@ -208,14 +267,17 @@ impl<T: Payload> Publisher<T> {
     /// # Ok(()) }
     /// ```
     #[allow(unsafe_code)]
-    pub fn loan<F>(&self, f: F) -> Result<bool, ExecutorError>
+    pub fn loan<F>(&self, f: F) -> Result<NotifyOutcome, ExecutorError>
     where
         F: FnOnce(&mut core::mem::MaybeUninit<T>) -> bool,
     {
         let mut sample = self.inner.loan_uninit().map_err(ExecutorError::iceoryx2)?;
         let cont = f(sample.payload_mut());
         if !cont {
-            return Ok(false);
+            return Ok(NotifyOutcome {
+                sent: false,
+                listeners_notified: 0,
+            });
         }
         // SAFETY: the closure returned `true`, asserting that the payload was
         // fully initialised before this point. Per the documented contract,
@@ -223,8 +285,11 @@ impl<T: Payload> Publisher<T> {
         // contract violation and the resulting behaviour is undefined.
         let sample = unsafe { sample.assume_init() };
         sample.send().map_err(ExecutorError::iceoryx2)?;
-        self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
-        Ok(true)
+        let listeners_notified = self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
+        Ok(NotifyOutcome {
+            sent: true,
+            listeners_notified,
+        })
     }
 }
 

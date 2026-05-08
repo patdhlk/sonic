@@ -139,24 +139,40 @@ OS thread; `Runner::stop()` joins it and re-throws any item error.
 iceoryx2 itself handles SIGINT/SIGTERM natively — no `ctrlc` feature is
 needed and the loop exits cleanly on either signal.
 
-## Silencing iceoryx2 logs
+## Detecting dropped notifications
 
-iceoryx2 logs warnings (e.g. `FailedToDeliverSignal` under high publish rates)
-to its internal logger. To silence them, call `set_log_level` once at startup
-before any iceoryx2 service is created:
+When a publisher sends, iceoryx2 wakes each attached listener via a per-listener
+Unix datagram socket. If the listener's kernel socket buffer is full, that
+specific notification is dropped (the **data** still goes through the pub/sub
+channel reliably; only the wakeup is lost). iceoryx2 logs a verbose
+`FailedToDeliverSignal` warning when this happens.
 
-```rust
-use iceoryx2::prelude::{set_log_level, LogLevel};
+**This usually means the consumer is falling behind.** Either it can't drain
+fast enough, or the producer is bursting faster than the listener's socket
+buffer can absorb. Lost wakeups can usually be tolerated (the listener will
+still wake from a *previous* pending notification, drain everything, and
+catch up), but if you have a deadline-sensitive consumer or zero-buffered
+event semantics, every drop matters.
 
-fn main() {
-    set_log_level(LogLevel::Error);
-    // ... rest of your application
+The publisher's send methods return [`NotifyOutcome`] so callers can detect
+this programmatically without parsing logs:
+
+```rust,no_run
+# use sonic_executor::Publisher;
+# fn run(publisher: Publisher<u64>) -> Result<(), Box<dyn std::error::Error>> {
+let outcome = publisher.send_copy(42_u64)?;
+if !outcome.delivered_to_any_listener() {
+    // No listener received the wakeup. Either no subscribers are attached
+    // (normal during startup), or every subscriber's socket was full.
+    eprintln!("warn: send dropped, listeners_notified={}", outcome.listeners_notified);
 }
+# Ok(()) }
 ```
 
-Setting `IOX2_LOG_LEVEL=error` alone has no effect unless your application
-also calls `iceoryx2::prelude::set_log_level_from_env_or_default()` at
-startup.
+If you want to silence iceoryx2's verbose logging anyway (e.g. in production),
+call `iceoryx2::prelude::set_log_level(LogLevel::Error)` once at startup. But
+inspect `NotifyOutcome::listeners_notified` first — silencing the log without
+checking the return is how dropped wakeups become silent bugs.
 
 ## Examples
 

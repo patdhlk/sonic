@@ -75,7 +75,7 @@ impl<T: Payload + Default + Copy + Send> ExecutableItem for SignalItem<T> {
     }
 
     fn execute(&mut self, _ctx: &mut Context<'_>) -> ExecuteResult {
-        let did_send = if let Some(cb) = self.before_send.as_mut() {
+        let outcome = if let Some(cb) = self.before_send.as_mut() {
             self.publisher
                 .loan_send(|t: &mut T| (cb)(t))
                 .map_err(|e| -> crate::error::ItemError { Box::new(e) })?
@@ -84,7 +84,7 @@ impl<T: Payload + Default + Copy + Send> ExecutableItem for SignalItem<T> {
                 .loan_send(|_| true)
                 .map_err(|e| -> crate::error::ItemError { Box::new(e) })?
         };
-        if did_send {
+        if outcome.sent {
             Ok(ControlFlow::Continue)
         } else {
             Ok(ControlFlow::StopChain)

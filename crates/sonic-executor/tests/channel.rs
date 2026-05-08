@@ -24,7 +24,9 @@ fn publisher_send_notifies_subscriber_listener() {
     let publisher = channel.publisher().unwrap();
     let subscriber = channel.subscriber().unwrap();
 
-    publisher.send_copy(Msg(42)).unwrap();
+    let outcome = publisher.send_copy(Msg(42)).unwrap();
+    assert!(outcome.sent);
+    assert_eq!(outcome.listeners_notified, 1, "1 subscriber attached");
 
     // The subscriber's listener fires because Publisher::send notified.
     let listener = subscriber.listener_handle();
@@ -58,13 +60,16 @@ fn publisher_loan_zero_copy_round_trip() {
     let publisher = channel.publisher().unwrap();
     let subscriber = channel.subscriber().unwrap();
 
-    let sent = publisher
+    let outcome = publisher
         .loan(|slot: &mut MaybeUninit<Msg>| {
             slot.write(Msg(99));
             true
         })
         .unwrap();
-    assert!(sent);
+    assert!(
+        outcome.delivered_to_any_listener(),
+        "expected delivery to at least one listener"
+    );
 
     let sample = subscriber.take().unwrap().expect("payload");
     assert_eq!(sample.payload().0, 99);
@@ -81,14 +86,15 @@ fn publisher_loan_skip_returns_false() {
     let publisher = channel.publisher().unwrap();
     let subscriber = channel.subscriber().unwrap();
 
-    let sent = publisher
+    let outcome = publisher
         .loan(|_slot: &mut MaybeUninit<Msg>| {
             // Closure decides not to send. Note: not initialising the slot is
             // safe here because we return false (no `assume_init` happens).
             false
         })
         .unwrap();
-    assert!(!sent);
+    assert!(!outcome.sent);
+    assert_eq!(outcome.listeners_notified, 0);
 
     let received = subscriber.take().unwrap();
     assert!(received.is_none(), "no message should have been sent");

@@ -38,7 +38,7 @@ mod task_kind;
 mod thread_attrs;
 mod trigger;
 
-pub use channel::{Channel, EVENT_SUFFIX, Publisher, Subscriber};
+pub use channel::{Channel, EVENT_SUFFIX, NotifyOutcome, Publisher, Subscriber};
 pub use condition::{Conditional, wrap_with_condition};
 pub use context::{Context, Stoppable};
 pub use control_flow::{ControlFlow, ExecuteResult};
