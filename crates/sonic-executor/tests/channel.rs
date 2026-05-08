@@ -46,3 +46,50 @@ fn opening_same_channel_twice_does_not_panic() {
     let _b: Arc<Channel<Msg>> = Channel::open_or_create(&node, &chan_name).unwrap();
     // No assertion — the call must not panic and must not deadlock.
 }
+
+#[test]
+fn publisher_loan_zero_copy_round_trip() {
+    use core::mem::MaybeUninit;
+
+    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let channel: Arc<Channel<Msg>> =
+        Channel::open_or_create(&node, &unique("sonic.test.loan")).unwrap();
+
+    let publisher = channel.publisher().unwrap();
+    let subscriber = channel.subscriber().unwrap();
+
+    let sent = publisher
+        .loan(|slot: &mut MaybeUninit<Msg>| {
+            slot.write(Msg(99));
+            true
+        })
+        .unwrap();
+    assert!(sent);
+
+    let sample = subscriber.take().unwrap().expect("payload");
+    assert_eq!(sample.payload().0, 99);
+}
+
+#[test]
+fn publisher_loan_skip_returns_false() {
+    use core::mem::MaybeUninit;
+
+    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let channel: Arc<Channel<Msg>> =
+        Channel::open_or_create(&node, &unique("sonic.test.loan_skip")).unwrap();
+
+    let publisher = channel.publisher().unwrap();
+    let subscriber = channel.subscriber().unwrap();
+
+    let sent = publisher
+        .loan(|_slot: &mut MaybeUninit<Msg>| {
+            // Closure decides not to send. Note: not initialising the slot is
+            // safe here because we return false (no `assume_init` happens).
+            false
+        })
+        .unwrap();
+    assert!(!sent);
+
+    let received = subscriber.take().unwrap();
+    assert!(received.is_none(), "no message should have been sent");
+}

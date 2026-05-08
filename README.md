@@ -26,6 +26,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Publishing options
+
+`Publisher<T>` exposes three send paths with different cost/ergonomics tradeoffs:
+
+| Method | Sender-side cost | When |
+|---|---|---|
+| `send_copy(value)` | One move into shm | Tiny POD payloads (`u64`, small structs). Simplest. |
+| `loan_send(\|t\| ... )` | `T::default()` + in-place mutation | Medium types where `Default` is cheap. |
+| `loan(\|slot\| ... )` | None — closure constructs directly in shm | Large types or types without a sensible `Default`. |
+
+For large types use `loan` with `MaybeUninit::write(value)` or iceoryx2's
+`placement_default!` macro to get the full zero-copy benefit.
+
 ## Status
 
 Pre-1.0. APIs may change. See `docs/superpowers/specs/` for the design notes (gitignored — request from a maintainer).

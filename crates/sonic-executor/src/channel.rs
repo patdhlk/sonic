@@ -152,6 +152,75 @@ impl<T: Payload> Publisher<T> {
         self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
         Ok(true)
     }
+
+    /// True zero-copy send. The closure receives `&mut MaybeUninit<T>`; it
+    /// must fully initialize the payload (e.g., via `MaybeUninit::write(v)`
+    /// or in-place construction such as iceoryx2's `placement_default!`)
+    /// before returning `true`. Returning `false` skips the send.
+    ///
+    /// On success, sends and notifies. Returns `Ok(true)` if the payload was
+    /// sent, `Ok(false)` if the closure returned false.
+    ///
+    /// # Contract
+    ///
+    /// **Returning `true` from the closure asserts that the payload is
+    /// fully initialized.** Returning `true` without writing a valid `T`
+    /// causes undefined behaviour at the subsequent `assume_init` step.
+    ///
+    /// `T: Default` is **not** required — that's the point of this method
+    /// versus [`loan_send`](Self::loan_send). For types that have a sensible
+    /// `Default` and are cheap to default-construct, prefer `loan_send`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use core::mem::MaybeUninit;
+    /// use iceoryx2::prelude::*;
+    /// use sonic_executor::Channel;
+    /// use std::sync::Arc;
+    ///
+    /// #[derive(Debug, ZeroCopySend)]
+    /// #[repr(C)]
+    /// struct LargeMsg { payload: [u8; 64] }
+    ///
+    /// // Manual Default impl — e.g. initialised to a sentinel value rather
+    /// // than zero, so `loan_send` would use it but it is expensive.
+    /// impl Default for LargeMsg {
+    ///     fn default() -> Self { LargeMsg { payload: [0xFF; 64] } }
+    /// }
+    ///
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let node = NodeBuilder::new().create::<ipc::Service>()?;
+    /// let ch: Arc<Channel<LargeMsg>> = Channel::open_or_create(&node, "demo")?;
+    /// let publisher = ch.publisher()?;
+    ///
+    /// publisher.loan(|slot: &mut MaybeUninit<LargeMsg>| {
+    ///     // Initialise directly in shared memory — no Default construction,
+    ///     // no stack temporary for the payload array.
+    ///     slot.write(LargeMsg { payload: [0u8; 64] });
+    ///     true
+    /// })?;
+    /// # Ok(()) }
+    /// ```
+    #[allow(unsafe_code)]
+    pub fn loan<F>(&self, f: F) -> Result<bool, ExecutorError>
+    where
+        F: FnOnce(&mut core::mem::MaybeUninit<T>) -> bool,
+    {
+        let mut sample = self.inner.loan_uninit().map_err(ExecutorError::iceoryx2)?;
+        let cont = f(sample.payload_mut());
+        if !cont {
+            return Ok(false);
+        }
+        // SAFETY: the closure returned `true`, asserting that the payload was
+        // fully initialised before this point. Per the documented contract,
+        // a closure that returns `true` without writing a valid `T` is a
+        // contract violation and the resulting behaviour is undefined.
+        let sample = unsafe { sample.assume_init() };
+        sample.send().map_err(ExecutorError::iceoryx2)?;
+        self.notifier.notify().map_err(ExecutorError::iceoryx2)?;
+        Ok(true)
+    }
 }
 
 /// Pub/sub subscriber. Carries the paired event listener as `Arc<Listener>`
