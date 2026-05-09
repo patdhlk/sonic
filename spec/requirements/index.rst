@@ -1,13 +1,17 @@
 Requirements
 ============
 
-System-level requirements for `sonic-executor`. Each ``req`` directive
-satisfies one or more ``feat`` parents and is later refined by ``spec``
-directives under :doc:`../architecture/index`.
+System-level requirements for `sonic-executor` framed as the runtime heart
+of a soft-real-time PLC. Each ``req`` directive ``:satisfies:`` one ``feat``
+parent; each ``feat`` ``:satisfies:`` the top-level :need:`FEAT_0010`.
 
-This section is a stub. Concrete requirements derive from the implementation
-under ``../../crates/`` via ``pharaoh:write-plan`` →
-``pharaoh:execute-plan`` (template: ``reverse-engineer-project``).
+.. toctree::
+   :maxdepth: 2
+
+   plc-runtime
+
+Requirements at a glance
+------------------------
 
 .. needtable::
    :types: req
