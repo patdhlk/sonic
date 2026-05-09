@@ -1,0 +1,67 @@
+# sphinx-needs configuration consumed via `needs_from_toml = "ubproject.toml"`
+# in conf.py. Holds need-type and link-type declarations only — Sphinx-level
+# configuration (extensions, theme, etc.) lives in conf.py.
+
+[project]
+name = "sonic-spec"
+
+[needs]
+id_required = true
+id_length = 6
+
+# Need types — directives available in RST. Extend as the spec grows.
+[[needs.types]]
+directive = "feat"
+title = "Feature"
+prefix = "FEAT_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "req"
+title = "Requirement"
+prefix = "REQ_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "spec"
+title = "Specification"
+prefix = "SPEC_"
+color = "#FEDCD2"
+style = "node"
+
+[[needs.types]]
+directive = "impl"
+title = "Implementation"
+prefix = "IMPL_"
+color = "#DF744A"
+style = "node"
+
+[[needs.types]]
+directive = "test"
+title = "Test Case"
+prefix = "TEST_"
+color = "#DCB239"
+style = "node"
+
+# Extra link types — additional traceability relations beyond the built-in
+# `:links:` option. Keyed by option name; each entry sets the outgoing and
+# incoming display text. (sphinx-needs 8.0 renamed extra_links → links and
+# changed the shape from list-of-dicts to a dict-of-dicts.)
+
+[needs.links.satisfies]
+incoming = "is satisfied by"
+outgoing = "satisfies"
+
+[needs.links.refines]
+incoming = "is refined by"
+outgoing = "refines"
+
+[needs.links.implements]
+incoming = "is implemented by"
+outgoing = "implements"
+
+[needs.links.verifies]
+incoming = "is verified by"
+outgoing = "verifies"

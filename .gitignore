@@ -3,3 +3,13 @@
 
 # Process artefacts (specs, brainstorming notes, etc.) — kept locally, not tracked.
 /docs/superpowers/
+
+# Spec project build artefacts and uv venv.
+/spec/_build/
+/spec/.venv/
+
+# Pharaoh ephemeral state (project tailoring at .pharaoh/project/ IS committed).
+/spec/.pharaoh/runs/
+/spec/.pharaoh/plans/
+/spec/.pharaoh/session.json
+/spec/.pharaoh/cache/

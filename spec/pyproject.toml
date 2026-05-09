@@ -1,0 +1,18 @@
+[project]
+name = "sonic-spec"
+version = "0.1.0"
+description = "Specification documentation for sonic-executor."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Patrick Dahlke" }]
+license = { text = "Apache-2.0 OR MIT" }
+
+dependencies = [
+    "sphinx>=7,<9",
+    "sphinx-needs==8.0.0",
+    "sphinx-hextra>=0.1.0.dev0",
+    "myst-parser>=2",
+]
+
+[tool.uv]
+package = false
