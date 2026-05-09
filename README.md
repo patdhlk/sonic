@@ -13,6 +13,8 @@ parallel DAGs; signal/slot; lifecycle observability.
 > support, or backwards-compatibility guarantee. Use it to learn from, fork,
 > or vendor in — not to ship.
 
+**Specification:** [https://patdhlk.com/sonic/](https://patdhlk.com/sonic/) — built from `spec/` on every push to `main`.
+
 ## What's here
 
 Three crates in the workspace:

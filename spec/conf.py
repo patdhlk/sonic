@@ -39,3 +39,7 @@ needs_from_toml = "ubproject.toml"
 html_theme = "sphinx_hextra"
 html_static_path = ["_static"]
 html_title = project
+
+# Canonical URL for the published site (GitHub Pages → patdhlk.com/sonic/).
+# Affects only metadata (sitemaps, canonical links); does not change asset paths.
+html_baseurl = "https://patdhlk.com/sonic/"
