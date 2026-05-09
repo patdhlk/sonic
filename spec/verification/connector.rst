@@ -1,0 +1,373 @@
+Connector framework — verification
+==================================
+
+Test cases verifying the connector framework requirements. Each ``test``
+directive ``:verifies:`` one or more requirements from
+:doc:`../requirements/connector` (or building blocks from
+:doc:`../architecture/connector`). The four-layer test pyramid from the
+architecture's quality strategy is reflected by the section grouping
+below: unit, codec, transport integration, MQTT integration, workspace
+end-to-end, and loom concurrency.
+
+Implementation tests (Rust ``#[test]``) and the verification artefacts
+on this page trace 1:1 — once the implementation lands, each ``test``
+body cites the Rust test path that runs it.
+
+----
+
+Unit tests
+----------
+
+Per-crate, no IPC, parallel-safe.
+
+.. test:: ExponentialBackoff invariants
+   :id: TEST_0100
+   :status: open
+   :verifies: REQ_0233
+
+   Property test (``proptest``) on ``ExponentialBackoff`` confirming:
+   delays are monotonically non-decreasing until the cap is reached,
+   delays never exceed the configured maximum, ``reset()`` returns the
+   policy to the initial delay, and jitter stays within the configured
+   ratio. Lives under ``sonic-connector-core/tests/``.
+
+.. test:: ConnectorHealth state-machine transitions
+   :id: TEST_0101
+   :status: open
+   :verifies: REQ_0230, REQ_0234
+
+   Unit test asserting that every valid transition between
+   ``ConnectorHealth`` variants (per :need:`ARCH_0012`) emits exactly
+   one ``HealthEvent`` on the connector's health channel, and that
+   illegal transitions panic in debug builds.
+
+.. test:: MqttRouting wildcard demux predicate
+   :id: TEST_0102
+   :status: open
+   :verifies: REQ_0254
+
+   Unit-level coverage of the topic-match predicate independent of any
+   broker or iceoryx2 service: every (subscription pattern, incoming
+   topic) pair is asserted against the MQTT 3.1.1 wildcard semantics
+   (single-level ``+``, multi-level ``#``).
+
+.. test:: ChannelDescriptor validation
+   :id: TEST_0103
+   :status: open
+   :verifies: REQ_0201, REQ_0221
+
+   Asserts that constructing a ``ChannelDescriptor`` with an empty
+   name fails, and that the const-generic ``N`` propagates correctly
+   through ``create_writer`` / ``create_reader`` (compile-fail tests
+   ensure mismatched ``N`` values do not type-check).
+
+----
+
+Codec tests
+-----------
+
+.. test:: JsonCodec round-trip property test
+   :id: TEST_0110
+   :status: open
+   :verifies: REQ_0210, REQ_0212
+
+   ``proptest``-driven round-trip for a representative struct:
+   ``encode(value, &mut buf)`` followed by ``decode(&buf[..len])``
+   yields a value equal to the original under every shrunken input.
+   Runs against ``JsonCodec``; will be parameterised over
+   ``MsgPackCodec`` and ``ProtoCodec`` once those land.
+
+.. test:: Codec encode error on undersized buffer
+   :id: TEST_0111
+   :status: open
+   :verifies: REQ_0213
+
+   Encoding a value larger than the provided buffer returns
+   ``ConnectorError::Codec`` carrying the codec's static
+   ``format_name()`` and the underlying serializer error chain.
+
+.. test:: Codec decode error propagation
+   :id: TEST_0112
+   :status: open
+   :verifies: REQ_0214
+
+   Receiving a payload that fails ``decode<T>`` (e.g. truncated JSON,
+   wrong shape) surfaces as ``ConnectorError::Codec`` from
+   ``ChannelReader::try_recv`` rather than silently dropping the
+   envelope.
+
+----
+
+Transport integration tests
+---------------------------
+
+Iceoryx2 services are real; tests run with ``--test-threads=1``; each
+test scopes its own ``Node`` name.
+
+.. test:: ChannelWriter → ChannelReader round-trip
+   :id: TEST_0120
+   :status: open
+   :verifies: REQ_0205, REQ_0223
+
+   End-to-end zero-copy round-trip through a real iceoryx2 service:
+   ``writer.send(&value)`` followed by ``reader.try_recv()`` yields
+   the same value. Verifies that ``Publisher::loan`` is used (no
+   intermediate copies) by asserting on a header field set in-place.
+
+.. test:: Sequence-number monotonicity
+   :id: TEST_0121
+   :status: open
+   :verifies: REQ_0202
+
+   Sending N envelopes through a single ``ChannelWriter`` and reading
+   them on the corresponding ``ChannelReader`` asserts strictly
+   increasing ``sequence_number`` values starting at zero.
+
+.. test:: Timestamp populated at send
+   :id: TEST_0122
+   :status: open
+   :verifies: REQ_0203
+
+   Captures wall-clock time before and after ``writer.send``; the
+   received envelope's ``timestamp_ns`` falls within the bracket.
+
+.. test:: Correlation ID round-trip
+   :id: TEST_0123
+   :status: open
+   :verifies: REQ_0204
+
+   ``writer.send_with_correlation(&value, id)`` followed by
+   ``reader.try_recv()`` yields a header whose ``correlation_id``
+   bytes equal ``id``. Confirms the framework does not interpret the
+   field — random bytes round-trip unchanged.
+
+.. test:: Per-channel size — 4 KB, 64 KB, 1 MB
+   :id: TEST_0124
+   :status: open
+   :verifies: REQ_0201, BB_0010
+
+   Three round-trip tests with channels parameterised at distinct
+   ``N`` (4 096, 65 536, 1 048 576). All three succeed; iceoryx2
+   services have non-overlapping pool sizes per channel.
+
+.. test:: Payload-overflow rejection
+   :id: TEST_0125
+   :status: open
+   :verifies: REQ_0201
+
+   ``writer.send(&value)`` for a value whose encoded form exceeds
+   the channel's ``N`` returns
+   ``ConnectorError::PayloadOverflow { actual, max }`` and emits no
+   envelope on the wire.
+
+.. test:: Service naming derived from descriptor
+   :id: TEST_0126
+   :status: open
+   :verifies: REQ_0206, BB_0011
+
+   Two ``ChannelDescriptor`` values with identical ``name`` produce
+   identical iceoryx2 service names; differing ``name`` values
+   produce different service names. Names follow the convention
+   documented in :need:`BB_0011`.
+
+----
+
+MQTT integration tests
+----------------------
+
+Embedded ``rumqttd`` per-test fixture on an ephemeral port; iceoryx2
+services per test as before; one tokio runtime per test.
+
+.. test:: QoS 0 round-trip
+   :id: TEST_0130
+   :status: open
+   :verifies: REQ_0252
+
+   Plugin → gateway → broker → gateway → plugin round-trip with
+   ``MqttRouting { qos: AtMostOnce, retained: false }``. Asserts the
+   payload bytes are preserved end-to-end.
+
+.. test:: QoS 1 round-trip
+   :id: TEST_0131
+   :status: open
+   :verifies: REQ_0252
+
+   Same as TEST_0130 but with ``qos: AtLeastOnce``. Additionally
+   asserts a ``PUBACK`` is observed on the gateway side before
+   reporting success.
+
+.. test:: Retained-message publish + subscribe
+   :id: TEST_0132
+   :status: open
+   :verifies: REQ_0253
+
+   Publish with ``retained: true``; a subsequent subscribe receives
+   the retained payload as the first message. Publish a second
+   payload with ``retained: false`` and verify the retained value is
+   not overwritten by an unset retained.
+
+.. test:: Wildcard subscription with `+`
+   :id: TEST_0133
+   :status: open
+   :verifies: REQ_0254
+
+   Subscribe with ``plant/+/temperature``; publish to
+   ``plant/A/temperature`` and ``plant/B/temperature`` and
+   ``plant/A/B/temperature``. Reader receives the first two; not the
+   third.
+
+.. test:: Wildcard subscription with `#`
+   :id: TEST_0134
+   :status: open
+   :verifies: REQ_0254
+
+   Subscribe with ``plant/#``; publish to ``plant/A``,
+   ``plant/A/B``, ``plant/A/B/C``. Reader receives all three.
+
+.. test:: Username/password authentication
+   :id: TEST_0135
+   :status: open
+   :verifies: REQ_0255
+
+   ``MqttConnectorOptions`` configured with username + password;
+   ``rumqttd`` fixture configured to require credentials. CONNECT
+   succeeds; a wrong-credential variant of the same test fails with
+   ``ConnectorHealth::Down { reason: "auth" }``.
+
+.. test:: TLS connection (developer-machine only)
+   :id: TEST_0136
+   :status: open
+   :verifies: REQ_0256
+
+   ``rumqttd`` fixture configured with a self-signed cert; the
+   ``tls`` cargo feature is enabled; ``MqttConnectorOptions`` points
+   at the test cert. CONNECT succeeds. **Not run in CI** — gated
+   behind ``cfg(feature = "tls")`` and a ``CONNECTOR_MQTT_TLS_TESTS``
+   env var so the repo carries no embedded test certs.
+
+.. test:: Reconnect after broker bounce
+   :id: TEST_0137
+   :status: open
+   :verifies: REQ_0232, REQ_0233
+
+   While the connector is ``Up``, kill the ``rumqttd`` fixture;
+   observe transition to ``Down`` then ``Connecting``; restart the
+   broker; observe transition back to ``Up`` within
+   ``ExponentialBackoff::max_delay`` seconds. Counts of HealthEvent
+   transitions are asserted.
+
+.. test:: HealthEvent emitted on every transition
+   :id: TEST_0138
+   :status: open
+   :verifies: REQ_0234
+
+   Drives the connector through every legal transition in
+   :need:`ARCH_0012` and asserts a ``HealthEvent`` arrives on
+   ``subscribe_health()`` for each one, in the order driven.
+
+.. test:: Outbound bridge saturation → BackPressure
+   :id: TEST_0139
+   :status: open
+   :verifies: REQ_0260
+
+   Configure ``MqttConnectorOptions`` with a tiny outbound-bridge
+   capacity (e.g. 2). Stop draining the gateway by holding the
+   tokio task busy. Send N > 2 messages; the (N-1)th or Nth send
+   returns ``Err(ConnectorError::BackPressure)`` and the connector
+   transitions to ``ConnectorHealth::Degraded``.
+
+.. test:: Inbound bridge saturation → DroppedInbound
+   :id: TEST_0140
+   :status: open
+   :verifies: REQ_0261
+
+   Configure a tiny inbound-bridge capacity. Block the inbound
+   gateway item from draining (e.g. by holding ``ChannelReader``).
+   Publish a flood of QoS 0 messages from the broker fixture; the
+   gateway emits ``HealthEvent::DroppedInbound { count }`` with
+   ``count > 0``. For QoS 1 traffic, ``PUBACK`` is observably
+   delayed until the bridge drains.
+
+----
+
+Workspace end-to-end tests
+--------------------------
+
+Full stack exercised via ``sonic-connector-host`` examples or
+``assert_cmd``-driven binary smoke tests.
+
+.. test:: In-process gateway smoke
+   :id: TEST_0150
+   :status: open
+   :verifies: REQ_0241, ARCH_0020
+
+   Single-binary integration: ``ConnectorHost`` launches the plugin
+   executor and an in-process tokio task hosting ``MqttGateway``
+   against a ``rumqttd`` fixture. End-to-end pub/sub round-trip
+   succeeds; process exits cleanly on programmatic stop.
+
+.. test:: Separate-process gateway smoke
+   :id: TEST_0151
+   :status: open
+   :verifies: REQ_0242, ARCH_0021
+
+   Two binaries: a plugin process running ``ConnectorHost`` and a
+   gateway process running ``ConnectorGateway`` against
+   ``rumqttd``. SHM transport carries envelopes between them. A
+   round-trip succeeds; both processes exit cleanly.
+
+.. test:: SIGINT clean exit within 5-second budget
+   :id: TEST_0152
+   :status: open
+   :verifies: REQ_0243, ARCH_0013
+
+   While the connector is mid-traffic, send SIGINT; the host returns
+   from ``run()`` within 5 seconds; tokio runtime drains; all
+   iceoryx2 services release; exit code is 0.
+
+.. test:: No control-plane envelopes flow
+   :id: TEST_0153
+   :status: open
+   :verifies: REQ_0244, REQ_0291
+
+   With one channel configured, observe the iceoryx2 service for the
+   duration of a normal session: the only envelopes that flow are
+   user-payload envelopes (no "ping", "version", or "shutdown
+   handshake"). Asserts the framework's no-control-plane invariant.
+
+----
+
+Loom concurrency tests
+----------------------
+
+Run with ``cargo test --features loom`` under ``cfg(loom)``.
+
+.. test:: Bridge handoff under arbitrary interleaving
+   :id: TEST_0160
+   :status: open
+   :verifies: REQ_0259, BB_0022
+
+   Loom model of ``OutboundGatewayItem.execute`` racing with the
+   tokio task draining the bridge: every produced frame is observed
+   exactly once by the consumer; no deadlock.
+
+.. test:: Health state-machine under concurrent updates
+   :id: TEST_0161
+   :status: open
+   :verifies: REQ_0230, REQ_0234
+
+   Loom model with multiple threads attempting transitions
+   simultaneously (e.g. the tokio task reporting ``Down`` while the
+   reconnect timer fires ``Connecting``): the state machine never
+   enters an invalid state and no event is dropped.
+
+----
+
+Cross-cutting traceability
+--------------------------
+
+.. needtable::
+   :types: test
+   :filter: "TEST_01" in id
+   :columns: id, title, status, verifies
+   :show_filters:

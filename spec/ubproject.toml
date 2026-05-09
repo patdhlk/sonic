@@ -45,6 +45,59 @@ prefix = "TEST_"
 color = "#DCB239"
 style = "node"
 
+# arc42 architecture types — used in spec/architecture/ pages following the
+# useblocks "x-as-code" arc42 conventions
+# (https://x-as-code.useblocks.com/how-to-guides/arc42/index.html).
+
+[[needs.types]]
+directive = "quality-goal"
+title = "Quality Goal"
+prefix = "QG_"
+color = "#A4D4AE"
+style = "node"
+
+[[needs.types]]
+directive = "constraint"
+title = "Constraint"
+prefix = "CON_"
+color = "#E8C8A0"
+style = "node"
+
+[[needs.types]]
+directive = "arch-decision"
+title = "Architecture Decision"
+prefix = "ADR_"
+color = "#A6C8E0"
+style = "node"
+
+[[needs.types]]
+directive = "building-block"
+title = "Building Block"
+prefix = "BB_"
+color = "#C0A6E0"
+style = "node"
+
+[[needs.types]]
+directive = "architecture"
+title = "Architecture View"
+prefix = "ARCH_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "risk"
+title = "Risk"
+prefix = "RISK_"
+color = "#E0A6A6"
+style = "node"
+
+[[needs.types]]
+directive = "term"
+title = "Glossary Term"
+prefix = "GLOSS_"
+color = "#D8D8D8"
+style = "node"
+
 # Extra link types — additional traceability relations beyond the built-in
 # `:links:` option. Keyed by option name; each entry sets the outgoing and
 # incoming display text. (sphinx-needs 8.0 renamed extra_links → links and

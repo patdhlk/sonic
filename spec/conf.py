@@ -13,6 +13,7 @@ extensions = [
     "myst_parser",
     "sphinx_needs",
     "sphinx_hextra",
+    "sphinxcontrib.mermaid",
 ]
 
 templates_path = ["_templates"]

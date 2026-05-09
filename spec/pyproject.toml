@@ -12,6 +12,7 @@ dependencies = [
     "sphinx-needs==8.0.0",
     "sphinx-hextra>=0.1.0.dev0",
     "myst-parser>=2",
+    "sphinxcontrib-mermaid>=0.9",
 ]
 
 [tool.uv]
