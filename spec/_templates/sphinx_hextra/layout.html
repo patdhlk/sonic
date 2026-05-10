@@ -1,0 +1,18 @@
+{# Override of sphinx-hextra's layout.html scripts block.
+
+   Upstream's loop renders `<script src="{{ pathto(scriptfile.filename, 1)|e }}"></script>`
+   for every entry in script_files, regardless of whether `filename` is set. For
+   inline scripts created via `app.add_js_file(None, body=..., type="module")`
+   (e.g. sphinxcontrib-mermaid 2.x's mermaid initialization), the upstream
+   template emits a broken `<script src="../"></script>` and silently drops
+   the body. This override delegates to Sphinx's built-in `js_tag()` helper,
+   which handles all three cases (string, file with attributes, inline body
+   with attributes) per sphinx/builders/html/__init__.py:js_tag().
+#}
+{%- extends "!sphinx_hextra/layout.html" %}
+
+{%- block scripts %}
+  {%- for scriptfile in script_files %}
+    {{ js_tag(scriptfile) }}
+  {%- endfor %}
+{%- endblock %}
