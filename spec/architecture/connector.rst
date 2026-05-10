@@ -143,9 +143,12 @@ ecosystem; they are non-negotiable inputs to the architecture.
         SHM[("iceoryx2 shared memory<br/>+ event service")]
         GW["sonic-connector gateway<br/>(tokio + protocol stack)"]
         EXT[("external system<br/>e.g. MQTT broker")]
-        APP <-- ConnectorEnvelope --> SHM
-        SHM <-- ConnectorEnvelope --> GW
-        GW <-- protocol native --> EXT
+        APP -- ConnectorEnvelope --> SHM
+        SHM -- ConnectorEnvelope --> APP
+        SHM -- ConnectorEnvelope --> GW
+        GW -- ConnectorEnvelope --> SHM
+        GW -- protocol native --> EXT
+        EXT -- protocol native --> GW
 
    In-process deployment collapses the SHM hop to a single-process
    shared-memory transport but preserves the same envelope contract;
@@ -423,11 +426,11 @@ two crates that carry the most logic.
    .. mermaid::
 
       flowchart TB
-        subgraph existing[existing crates]
+        subgraph existing_crates[existing crates]
           EX[sonic-executor]
           TR[sonic-executor-tracing]
         end
-        subgraph new[new crates - this spec]
+        subgraph new_crates["new crates (this spec)"]
           CO[sonic-connector-core<br/>BB_0001]
           TX[sonic-connector-transport-iox<br/>BB_0002]
           CD[sonic-connector-codec<br/>BB_0003]
@@ -542,7 +545,7 @@ behaviour and the building blocks that implement it.
       sequenceDiagram
         autonumber
         participant U as user code
-        participant W as ChannelWriter&lt;T&gt;
+        participant W as ChannelWriter
         participant P as Publisher (sonic-executor)
         participant SHM as iceoryx2 SHM
         participant S as Subscriber (gateway)
@@ -583,7 +586,7 @@ behaviour and the building blocks that implement it.
         participant P as Publisher (gateway, in svc)
         participant SHM as iceoryx2 SHM
         participant S as Subscriber (app)
-        participant R as ChannelReader&lt;T&gt;
+        participant R as ChannelReader
         participant U as user code
 
         B->>MQ: PUBLISH (topic, payload)
@@ -614,7 +617,7 @@ behaviour and the building blocks that implement it.
         Degraded --> Up: recovery
         Up --> Down: stack-level disconnect
         Degraded --> Down: error threshold exceeded
-        Down --> Connecting: ReconnectPolicy::next_delay() elapses
+        Down --> Connecting: ReconnectPolicy backoff elapses
         Connecting --> Down: connect attempt fails
         Up --> [*]: shutdown
         Down --> [*]: shutdown
