@@ -1,0 +1,14 @@
+{
+  "name": "sonic-spec-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tooling for the sonic-spec sphinx-needs project. Currently only ships the mermaid validator (validate-mermaid.mjs) used by CI to catch syntax errors in `.. mermaid::` blocks before deploy.",
+  "scripts": {
+    "validate-mermaid": "node validate-mermaid.mjs .."
+  },
+  "dependencies": {
+    "mermaid": "11.12.1",
+    "jsdom": "^25.0.0"
+  }
+}

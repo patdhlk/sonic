@@ -39,6 +39,21 @@ jobs:
         working-directory: spec
         run: uv run sphinx-build -W -b html . _build/html
 
+      - name: Set up Node for mermaid validator
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: spec/scripts/package-lock.json
+
+      - name: Install mermaid validator deps
+        working-directory: spec/scripts
+        run: npm ci --silent
+
+      - name: Validate mermaid diagrams (gate before deploy)
+        working-directory: spec
+        run: node scripts/validate-mermaid.mjs .
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

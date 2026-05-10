@@ -8,6 +8,10 @@
 /spec/_build/
 /spec/.venv/
 
+# Node deps for the spec/scripts/ tooling (mermaid validator). The
+# package-lock.json IS committed for reproducibility; node_modules is not.
+/spec/scripts/node_modules/
+
 # Pharaoh ephemeral state (project tailoring at .pharaoh/project/ IS committed).
 /spec/.pharaoh/runs/
 /spec/.pharaoh/plans/
