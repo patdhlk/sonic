@@ -10,6 +10,12 @@ use crate::trigger::{TriggerDecl, TriggerDeclarer};
 pub struct Vertex(pub(crate) usize);
 
 /// Internal graph storage.
+///
+/// Stored inside `TaskKind::Graph(Box<Graph>)` to guarantee a stable heap
+/// address — the per-vertex dispatch closures capture a `*const Graph`
+/// pointing back into this struct, and would dangle if the `Graph` moved.
+/// All runtime state below is pre-allocated at `finish()` time and reset
+/// in place each `run_once_borrowed` call. Required for REQ_0060.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) struct Graph {
     pub(crate) items: Vec<Box<dyn ExecutableItem>>,
@@ -17,6 +23,38 @@ pub(crate) struct Graph {
     pub(crate) in_degree: Vec<usize>,       // initial in-degree
     pub(crate) root: usize,
     pub(crate) decls: Vec<TriggerDecl>,
+
+    // ── Pre-allocated dispatch state (REQ_0060) ────────────────────────
+    /// Stable raw pointers into each item's heap-allocated `Box`.
+    /// Populated once in `finish`. The `Box` contents do not move when
+    /// the outer `Vec` resizes, so these pointers stay valid for the
+    /// lifetime of the `Graph`.
+    vertex_ptrs: Vec<VertexPtr>,
+    /// Per-vertex in-degree counter; reset to `in_degree[i]` at the top
+    /// of every `run_once_borrowed`. `usize::MAX` is used as a "cancelled"
+    /// sentinel during stop-flag propagation.
+    counters: Vec<AtomicUsize>,
+    /// Number of vertices still pending in the current run.
+    pending: AtomicUsize,
+    /// Stop request observed during this run.
+    stop_flag: AtomicBool,
+    /// `ControlFlow::StopChain` observed during this run.
+    stop_chain_seen: AtomicBool,
+    /// First per-vertex error observed during this run.
+    first_err: Mutex<Option<crate::error::ItemError>>,
+    /// Completion condvar; signalled when `pending` reaches zero.
+    done_cv: (Mutex<()>, Condvar),
+    /// Re-dispatch ring — completed pool workers push ready successors;
+    /// the WaitSet thread drains and re-dispatches. Sized to
+    /// `next_power_of_two(n_vertices)` at `finish`. Required for REQ_0060.
+    ready_ring: crate::ready_ring::ReadyRing,
+    /// Per-vertex pre-built dispatch closures. Empty after `finish`,
+    /// populated by `prepare_dispatch` when the graph is registered with
+    /// an executor (it needs `task_id`/`stop`/`obs`/`mon`/`err_slot` from
+    /// the executor). Used by `run_once_borrowed` via
+    /// `Pool::submit_borrowed`, avoiding the per-vertex `Box` allocation
+    /// that `Pool::submit` requires.
+    vertex_jobs: Vec<Box<dyn FnMut() + Send + 'static>>,
 }
 
 impl core::fmt::Debug for Graph {
@@ -162,12 +200,33 @@ impl GraphBuilder {
             }
         }
 
+        let n_items = self.items.len();
+        let mut items = self.items;
+        // SAFETY: each `Box<dyn ExecutableItem>` is heap-allocated; its
+        // contents do not move when the outer Vec resizes. Stable.
+        #[allow(unsafe_code)]
+        let vertex_ptrs: Vec<VertexPtr> = items
+            .iter_mut()
+            .map(|b| VertexPtr(std::ptr::from_mut(b.as_mut())))
+            .collect();
+        let counters: Vec<AtomicUsize> =
+            in_degree.iter().map(|d| AtomicUsize::new(*d)).collect();
+
         Ok(Graph {
-            items: self.items,
+            items,
             successors,
             in_degree,
             root,
             decls,
+            vertex_ptrs,
+            counters,
+            pending: AtomicUsize::new(n_items),
+            stop_flag: AtomicBool::new(false),
+            stop_chain_seen: AtomicBool::new(false),
+            first_err: Mutex::new(None),
+            done_cv: (Mutex::new(()), Condvar::new()),
+            ready_ring: crate::ready_ring::ReadyRing::new(n_items),
+            vertex_jobs: Vec::new(),
         })
     }
 }
@@ -203,223 +262,266 @@ unsafe impl Send for VertexPtr {}
 #[allow(unsafe_code)]
 unsafe impl Sync for VertexPtr {}
 
-/// Shared graph dispatch state. Owned via Arc by the `WaitSet` thread and
-/// every pool job spawned during a single `run_once` invocation.
-struct GraphRuntime {
-    items: Vec<VertexPtr>,
-    succ: Vec<Vec<usize>>,
-    counters: Vec<AtomicUsize>,
-    pending: AtomicUsize,
-    stop_flag: AtomicBool,
-    first_err: Mutex<Option<crate::error::ItemError>>,
-    stop_chain_seen: AtomicBool,
-    done_cv: (Mutex<()>, Condvar),
-    observer: Arc<dyn Observer>,
-    monitor: Arc<dyn ExecutionMonitor>,
+/// Send-able raw pointer back into a `Box<Graph>`. Used by the per-vertex
+/// dispatch closures to reach the graph's atomics and the ready ring
+/// without an `Arc`. Sound because the `Graph` is owned by
+/// `TaskKind::Graph(Box<Graph>)`, which keeps it at a stable heap
+/// address, and `pool.barrier()` (in `dispatch_loop`) serialises the
+/// closure's invocation with the executor thread's own access.
+#[allow(unsafe_code)]
+#[derive(Copy, Clone)]
+struct SendGraphPtr(*const Graph);
+
+impl SendGraphPtr {
+    /// Return the underlying pointer. Method form so Rust 2021 per-field
+    /// capture analysis grabs the whole `SendGraphPtr` (which is `Send +
+    /// Sync`) rather than `self.0` (a `*const`, which is not).
+    fn get(&self) -> *const Graph {
+        self.0
+    }
 }
 
-impl GraphRuntime {
-    /// Account for a vertex that was skipped (stop already set when it
-    /// would have run). Same accounting as `finalise_ran` but no successor
-    /// dispatch.
-    fn finalise_skipped(self: &Arc<Self>, i: usize) {
+#[allow(unsafe_code)]
+unsafe impl Send for SendGraphPtr {}
+#[allow(unsafe_code)]
+unsafe impl Sync for SendGraphPtr {}
+
+impl Graph {
+    fn finalise_skipped(&self, i: usize) {
         if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.notify_done();
             return;
         }
-        for &j in &self.succ[i] {
+        for &j in &self.successors[i] {
             self.cancel_subtree(j);
         }
     }
 
-    /// Walk a subtree from `root` and mark every vertex as "done" without
-    /// running it. Used when a stop happens and we need to drain pending.
-    fn cancel_subtree(self: &Arc<Self>, root: usize) {
+    fn cancel_subtree(&self, root: usize) {
+        // Iterative DFS using a small stack on the heap. The stack is
+        // bounded by the number of vertices and used only on the stop
+        // path; the steady-state happy path (REQ_0060) never enters
+        // here, so this stack's allocation does not violate the
+        // requirement. A pre-allocated scratch stack would be needed if
+        // cancellation were ever a hot path; document as future work
+        // when that becomes relevant.
         let mut stack = vec![root];
         while let Some(u) = stack.pop() {
-            // If counter is already MAX, this vertex was already cancelled.
             let prev = self.counters[u].swap(usize::MAX, Ordering::AcqRel);
             if prev != usize::MAX {
                 if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
                     self.notify_done();
                     return;
                 }
-                for &v in &self.succ[u] {
+                for &v in &self.successors[u] {
                     stack.push(v);
                 }
             }
         }
     }
 
-    fn notify_done(self: &Arc<Self>) {
+    fn notify_done(&self) {
         let _g = self.done_cv.0.lock().unwrap();
         self.done_cv.1.notify_all();
     }
 }
 
 impl Graph {
-    /// Dispatch this graph once and block until completion.
+    /// Build per-vertex dispatch closures and stash them on the graph.
+    /// Called once, when the graph is registered with an executor via
+    /// `ExecutorGraphBuilder::build`. The graph must already live inside
+    /// its `Box<Graph>` — closures capture `*const Graph` and rely on
+    /// that pointer remaining valid for the graph's lifetime.
     ///
-    /// Runs on the calling thread (the `WaitSet` thread). Vertices are
-    /// dispatched into `pool` and run concurrently; ready successors are
-    /// piped back to this thread via a crossbeam channel.
-    #[allow(unsafe_code, clippy::too_many_lines)]
-    pub(crate) fn run_once(
-        &mut self,
-        pool: &Arc<Pool>,
-        task_id: &TaskId,
-        stop: &Stoppable,
-        observer: &Arc<dyn Observer>,
-        monitor: &Arc<dyn ExecutionMonitor>,
-    ) -> GraphRunOutcome {
+    /// All captures are `Arc::clone`s (refcount-only at build time)
+    /// and `Copy` primitives; no per-iteration allocation occurs in
+    /// the resulting closures. Required for REQ_0060.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn prepare_dispatch(
+        self: &mut Box<Self>,
+        task_id: TaskId,
+        stop: Stoppable,
+        observer: Arc<dyn Observer>,
+        monitor: Arc<dyn ExecutionMonitor>,
+        err_slot: Arc<Mutex<Option<crate::error::ExecutorError>>>,
+    ) {
         let n = self.items.len();
-        let counters: Vec<AtomicUsize> = self
-            .in_degree
-            .iter()
-            .map(|d| AtomicUsize::new(*d))
-            .collect();
+        // SAFETY: we deref through the Box, getting a `*const Graph`
+        // that points at the Box's heap allocation. The Box's contents
+        // do not move while we hold the Box, so this pointer is stable
+        // for the lifetime of `self`. The pointer is shared with every
+        // per-vertex closure; the closures access only `&self`-style
+        // immutable atomics / Mutex slots on `Graph` (no aliasing
+        // mutation through this pointer).
+        #[allow(unsafe_code)]
+        let graph_ptr = SendGraphPtr(std::ptr::from_ref::<Graph>(self.as_ref()));
 
-        let runtime = Arc::new(GraphRuntime {
-            items: self
-                .items
-                .iter_mut()
-                .map(|b| VertexPtr(std::ptr::from_mut(b.as_mut())))
-                .collect(),
-            succ: self.successors.clone(),
-            counters,
-            pending: AtomicUsize::new(n),
-            stop_flag: AtomicBool::new(false),
-            first_err: Mutex::new(None),
-            stop_chain_seen: AtomicBool::new(false),
-            done_cv: (Mutex::new(()), Condvar::new()),
-            observer: Arc::clone(observer),
-            monitor: Arc::clone(monitor),
-        });
-
-        // Re-dispatch channel: completed vertex closures push successors
-        // that became ready; this thread drains the channel and submits
-        // them via `dispatch`.
-        let (ready_tx, ready_rx) = crossbeam_channel::unbounded::<usize>();
-
-        let dispatch = {
-            let runtime = Arc::clone(&runtime);
-            let pool = Arc::clone(pool);
+        let mut jobs: Vec<Box<dyn FnMut() + Send + 'static>> = Vec::with_capacity(n);
+        for i in 0..n {
             let task_id = task_id.clone();
             let stop = stop.clone();
-            move |i: usize| {
-                let runtime = Arc::clone(&runtime);
-                let ready_tx = ready_tx.clone();
-                let task_id = task_id.clone();
-                let stop = stop.clone();
-                // Extract app metadata before moving the pointer into the closure.
-                // SAFETY: we are on the WaitSet thread and in-degree sequencing
-                // ensures no other thread is currently executing vertex `i`.
-                let app_id = unsafe { (*runtime.items[i].0).app_id() };
-                let app_inst = unsafe { (*runtime.items[i].0).app_instance_id() };
-                pool.submit(move || {
-                    if runtime.stop_flag.load(Ordering::Acquire) {
-                        runtime.finalise_skipped(i);
-                        return;
-                    }
-                    let mut ctx =
-                        crate::context::Context::new(&task_id, &stop, runtime.observer.as_ref());
-                    let ptr = runtime.items[i].0;
-                    if let Some(aid) = app_id {
-                        runtime
-                            .observer
-                            .on_app_start(task_id.clone(), aid, app_inst);
-                    }
-                    let started = std::time::Instant::now();
-                    runtime.monitor.pre_execute(task_id.clone(), started);
-                    let res = crate::executor::run_item_catch_unwind_external(
-                        // SAFETY: VertexPtr is stable for the duration of run_once
-                        // (the Box is not moved). In-degree counters guarantee at
-                        // most one concurrent execution of any given vertex.
-                        unsafe { &mut *ptr },
-                        &mut ctx,
-                    );
-                    let took = started.elapsed();
-                    runtime
-                        .monitor
-                        .post_execute(task_id.clone(), started, took, res.is_ok());
-                    if let Err(ref e) = res {
-                        runtime.observer.on_app_error(task_id.clone(), e.as_ref());
-                    }
-                    if app_id.is_some() {
-                        runtime.observer.on_app_stop(task_id.clone());
-                    }
-                    match &res {
-                        Ok(crate::ControlFlow::Continue) => {}
-                        Ok(crate::ControlFlow::StopChain) => {
-                            runtime.stop_chain_seen.store(true, Ordering::Release);
-                            runtime.stop_flag.store(true, Ordering::Release);
-                        }
-                        Err(_) => runtime.stop_flag.store(true, Ordering::Release),
-                    }
-                    if let Err(e) = res {
-                        let mut g = runtime.first_err.lock().unwrap();
-                        if g.is_none() {
-                            *g = Some(e);
-                        }
-                    }
-                    if runtime.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-                        runtime.notify_done();
-                    } else if runtime.stop_flag.load(Ordering::Acquire) {
-                        for &j in &runtime.succ[i] {
-                            runtime.cancel_subtree(j);
-                        }
-                    } else {
-                        for &j in &runtime.succ[i] {
-                            if runtime.counters[j].fetch_sub(1, Ordering::AcqRel) == 1 {
-                                let _ = ready_tx.send(j);
-                            }
-                        }
-                    }
-                });
-            }
-        };
+            let observer = Arc::clone(&observer);
+            let monitor = Arc::clone(&monitor);
+            let err_slot = Arc::clone(&err_slot);
+            let graph_ptr = graph_ptr;
+            let job: Box<dyn FnMut() + Send + 'static> = Box::new(move || {
+                // SAFETY: see SendGraphPtr doc — pointer is stable, no
+                // aliasing mutation; pool.barrier() serialises the
+                // closure with the executor thread's own graph access.
+                #[allow(unsafe_code)]
+                let g: &Graph = unsafe { &*graph_ptr.get() };
 
-        // Seed: dispatch every initially-ready vertex (in-degree 0). By
-        // construction the only such vertex is the root.
+                if g.stop_flag.load(Ordering::Acquire) {
+                    g.finalise_skipped(i);
+                    return;
+                }
+                let mut ctx = crate::context::Context::new(&task_id, &stop, observer.as_ref());
+                let ptr = g.vertex_ptrs[i].0;
+                // SAFETY: vertex_ptrs hold stable raw pointers into the
+                // graph's `items` Boxes (see VertexPtr). In-degree
+                // counters sequence pool dispatches so at most one
+                // thread executes vertex `i` at a time.
+                #[allow(unsafe_code)]
+                let app_id = unsafe { (*ptr).app_id() };
+                #[allow(unsafe_code)]
+                let app_inst = unsafe { (*ptr).app_instance_id() };
+                if let Some(aid) = app_id {
+                    observer.on_app_start(task_id.clone(), aid, app_inst);
+                }
+                let started = std::time::Instant::now();
+                monitor.pre_execute(task_id.clone(), started);
+                #[allow(unsafe_code)]
+                let res =
+                    crate::executor::run_item_catch_unwind_external(unsafe { &mut *ptr }, &mut ctx);
+                let took = started.elapsed();
+                monitor.post_execute(task_id.clone(), started, took, res.is_ok());
+                if let Err(ref e) = res {
+                    observer.on_app_error(task_id.clone(), e.as_ref());
+                }
+                if app_id.is_some() {
+                    observer.on_app_stop(task_id.clone());
+                }
+                match &res {
+                    Ok(crate::ControlFlow::Continue) => {}
+                    Ok(crate::ControlFlow::StopChain) => {
+                        g.stop_chain_seen.store(true, Ordering::Release);
+                        g.stop_flag.store(true, Ordering::Release);
+                    }
+                    Err(_) => g.stop_flag.store(true, Ordering::Release),
+                }
+                if let Err(e) = res {
+                    let mut fe = g.first_err.lock().unwrap();
+                    if fe.is_none() {
+                        *fe = Some(e);
+                    }
+                }
+                if g.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    g.notify_done();
+                } else if g.stop_flag.load(Ordering::Acquire) {
+                    for &j in &g.successors[i] {
+                        g.cancel_subtree(j);
+                    }
+                } else {
+                    for &j in &g.successors[i] {
+                        if g.counters[j].fetch_sub(1, Ordering::AcqRel) == 1 {
+                            // Ring is sized to `next_power_of_two(n)` so
+                            // every vertex becoming ready exactly once
+                            // fits. If this fires the graph's
+                            // accounting is broken.
+                            g.ready_ring
+                                .push(j)
+                                .expect("ready_ring sized to n_vertices");
+                        }
+                    }
+                }
+                let _ = &err_slot; // currently unused on the vertex path
+                                   // (errors are bubbled via first_err / GraphRunOutcome)
+            });
+            jobs.push(job);
+        }
+        self.vertex_jobs = jobs;
+    }
+
+    /// Dispatch this graph once and block until completion. Allocation-free
+    /// in the steady state — runtime state was pre-allocated by
+    /// `Graph::finish` and per-vertex closures by `prepare_dispatch`.
+    /// Required by REQ_0060.
+    #[allow(unsafe_code)]
+    pub(crate) fn run_once_borrowed(&mut self, pool: &Pool) -> GraphRunOutcome {
+        let n = self.items.len();
+
+        // Reset per-iteration state in place.
+        for (c, d) in self.counters.iter().zip(self.in_degree.iter()) {
+            c.store(*d, Ordering::Relaxed);
+        }
+        self.pending.store(n, Ordering::Relaxed);
+        self.stop_flag.store(false, Ordering::Relaxed);
+        self.stop_chain_seen.store(false, Ordering::Relaxed);
+        *self.first_err.lock().unwrap() = None;
+        self.ready_ring.reset();
+
+        // Seed: dispatch every initially-ready vertex (those whose
+        // **initial** in-degree is zero). Race-free — `in_degree` is
+        // built once at finish() and never mutated, so we can't be
+        // tricked by a worker that has already started running root
+        // and decremented `counters[succ]` to zero before the seed
+        // loop reaches `succ`. Reading `counters[i]` here would race
+        // with the worker, redispatching the successor a second time
+        // (the worker's own push to `ready_ring` is the legitimate
+        // dispatch path).
         for i in 0..n {
-            if runtime.counters[i].load(Ordering::Acquire) == 0 {
-                dispatch(i);
+            if self.in_degree[i] == 0 {
+                self.dispatch_vertex(pool, i);
             }
         }
 
-        // Drain ready_rx until pending hits 0.
-        let (lock, condvar) = &runtime.done_cv;
+        // Drain ready_ring until pending hits 0.
         loop {
-            // Drain whatever ready successors are pending.
-            while let Ok(i) = ready_rx.try_recv() {
-                dispatch(i);
+            while let Some(i) = self.ready_ring.pop() {
+                self.dispatch_vertex(pool, i);
             }
-            // Fast-path: check pending without acquiring the lock.
-            if runtime.pending.load(Ordering::Acquire) == 0 {
+            if self.pending.load(Ordering::Acquire) == 0 {
                 break;
             }
-            // Slow path: acquire the lock, re-check, then wait briefly.
-            // condvar::wait_timeout requires we hold the guard across the
-            // call, so we intentionally keep it alive that long.
-            let guard = lock.lock().unwrap();
-            if runtime.pending.load(Ordering::Acquire) == 0 {
+            let guard = self.done_cv.0.lock().unwrap();
+            if self.pending.load(Ordering::Acquire) == 0 {
                 drop(guard);
                 break;
             }
             drop(
-                condvar
+                self.done_cv
+                    .1
                     .wait_timeout(guard, std::time::Duration::from_millis(5))
                     .unwrap()
                     .0,
             );
         }
         // Final drain.
-        while ready_rx.try_recv().is_ok() {}
+        while self.ready_ring.pop().is_some() {}
 
-        let mut first_err = runtime.first_err.lock().unwrap();
+        let mut first_err = self.first_err.lock().unwrap();
         GraphRunOutcome {
             error: first_err.take(),
-            stopped_chain: runtime.stop_chain_seen.load(Ordering::Acquire),
+            stopped_chain: self.stop_chain_seen.load(Ordering::Acquire),
+        }
+    }
+
+    /// Submit vertex `i`'s pre-built closure to the pool. Allocation-free
+    /// (uses `Pool::submit_borrowed`).
+    #[allow(unsafe_code)]
+    fn dispatch_vertex(&mut self, pool: &Pool, i: usize) {
+        let job_ptr: *mut (dyn FnMut() + Send) =
+            self.vertex_jobs[i].as_mut() as *mut (dyn FnMut() + Send);
+        // SAFETY: closure lives on this Graph, which lives inside
+        // `Box<Graph>` inside `TaskEntry`. `pool.barrier()` (called by
+        // the WaitSet thread at the end of every callback) ensures the
+        // closure has finished executing before the next iteration's
+        // callback can touch the graph again. We hold `&mut self`
+        // throughout `run_once_borrowed`, so the WaitSet thread is the
+        // sole user of the graph state outside of the pool worker's
+        // closure invocation.
+        unsafe {
+            pool.submit_borrowed(crate::pool::BorrowedJob::new(job_ptr));
         }
     }
 }

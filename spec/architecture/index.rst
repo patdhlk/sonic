@@ -12,6 +12,7 @@ detailed-design notes that predate the arc42 adoption.
    :maxdepth: 2
 
    connector
+   plc-runtime
 
 Building blocks
 ---------------

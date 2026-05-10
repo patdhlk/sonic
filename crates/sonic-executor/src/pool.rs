@@ -13,8 +13,55 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-/// Boxed unit of work submitted into the pool.
-type Job = Box<dyn FnOnce() + Send + 'static>;
+/// Unit of work submitted into the pool. Two variants:
+///
+/// * `Owned` carries a one-shot `Box<dyn FnOnce>` allocated by `submit`.
+///   Convenient when the caller has no place to park a stable closure
+///   (e.g. graph vertex dispatch where each vertex closure carries
+///   per-vertex state).
+/// * `Borrowed` carries a raw pointer to a `dyn FnMut() + Send` closure
+///   owned by the caller. The caller guarantees the closure outlives
+///   the job — discipline enforced by `pool.barrier()` before the
+///   closure could be touched again. The Borrowed path performs **no
+///   per-submit heap allocation**, which is required by REQ_0060
+///   (zero-alloc steady-state dispatch).
+enum Job {
+    Owned(Box<dyn FnOnce() + Send + 'static>),
+    Borrowed(BorrowedJob),
+}
+
+/// Send-able raw pointer to a caller-owned `FnMut` closure.
+///
+/// # Safety
+///
+/// `Send` is asserted by the pool's discipline: the caller (the
+/// executor) holds exclusive access to the closure between dispatches
+/// because `pool.barrier()` is called at the end of each WaitSet
+/// callback iteration, sequencing the closure's invocation strictly
+/// inside one iteration of `dispatch_loop`. The pointer is therefore
+/// not aliased on the worker side at the moment a new iteration's
+/// callback runs.
+#[allow(unsafe_code)]
+pub(crate) struct BorrowedJob(*mut (dyn FnMut() + Send));
+
+impl BorrowedJob {
+    /// Wrap a raw pointer to a caller-owned closure for the pool channel.
+    ///
+    /// # Safety
+    ///
+    /// The closure must outlive every submission of this `BorrowedJob`,
+    /// and the caller must serialise submissions with `pool.barrier()`
+    /// so the worker thread is not invoking it concurrently with the
+    /// caller's own access.
+    #[allow(unsafe_code)]
+    pub(crate) const unsafe fn new(ptr: *mut (dyn FnMut() + Send)) -> Self {
+        Self(ptr)
+    }
+}
+
+// SAFETY: see [`BorrowedJob`] doc comment.
+#[allow(unsafe_code)]
+unsafe impl Send for BorrowedJob {}
 
 /// Shared progress tracker — counts jobs submitted vs completed, used for
 /// `barrier()`.
@@ -116,8 +163,18 @@ impl Pool {
                     attrs.apply_to_self(i);
                     while !shutdown.load(Ordering::Acquire) {
                         match rx.recv() {
-                            Ok(job) => {
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                            Ok(Job::Owned(f)) => {
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                                tracker.complete();
+                            }
+                            Ok(Job::Borrowed(b)) => {
+                                // SAFETY: see BorrowedJob — caller's
+                                // barrier() pairs with this invocation
+                                // to ensure exclusive access.
+                                #[allow(unsafe_code)]
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                    || unsafe { (*b.0)() },
+                                ));
                                 tracker.complete();
                             }
                             Err(_) => break,
@@ -139,6 +196,10 @@ impl Pool {
 
     /// Submit a job to the pool. In inline mode the job runs immediately on
     /// the calling thread; in threaded mode it is enqueued for a worker.
+    ///
+    /// Allocates one `Box` per call in threaded mode. For hot-path dispatch
+    /// where the closure shape is stable across iterations, prefer
+    /// [`Pool::submit_borrowed`] which avoids the allocation.
     #[track_caller]
     pub(crate) fn submit<F>(&self, f: F)
     where
@@ -154,7 +215,35 @@ impl Pool {
                 // Safe to expect: the channel sender lives in self, and self can't be
                 // dropped while we hold &self. The only path to a closed channel is
                 // Pool::drop, which can't run concurrently with submit().
-                tx.send(Box::new(f)).expect("pool channel closed");
+                tx.send(Job::Owned(Box::new(f))).expect("pool channel closed");
+            }
+        }
+    }
+
+    /// Submit a job whose closure is owned by the caller and remains valid
+    /// across submissions. Performs **no heap allocation** per call (the
+    /// closure was allocated once when the caller built it). Required by
+    /// REQ_0060.
+    ///
+    /// # Safety
+    ///
+    /// See [`BorrowedJob::new`] — caller must hold exclusive access to the
+    /// closure between submissions and pair every submit with `barrier()`
+    /// before the closure could be touched again.
+    #[track_caller]
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn submit_borrowed(&self, job: BorrowedJob) {
+        self.tracker.submit();
+        match &self.mode {
+            PoolMode::Inline => {
+                // SAFETY: caller invariant.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    (*job.0)();
+                }));
+                self.tracker.complete();
+            }
+            PoolMode::Threaded { tx, .. } => {
+                tx.send(Job::Borrowed(job)).expect("pool channel closed");
             }
         }
     }

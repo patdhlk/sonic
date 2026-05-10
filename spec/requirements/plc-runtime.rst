@@ -281,8 +281,9 @@ Bounded-time dispatch
 
 .. req:: No heap allocation in dispatch
    :id: REQ_0060
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0017
+   :links: BB_0023, IMPL_0001, TEST_0170
 
    The runtime's dispatch path shall perform zero heap allocations during
    steady-state execution after ``Executor::run`` has been entered. All

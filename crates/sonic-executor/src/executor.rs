@@ -38,6 +38,14 @@ pub(crate) struct TaskEntry {
     pub(crate) kind: TaskKind,
     /// Trigger declarations recorded at `add` time.
     pub(crate) decls: Vec<TriggerDecl>,
+    /// Pre-allocated dispatch closure. Built once at `add` / `add_chain`
+    /// time and re-invoked on every dispatch iteration via
+    /// `Pool::submit_borrowed`, avoiding the per-iteration `Box::new(closure)`
+    /// that `Pool::submit<F>` requires in threaded mode. Required for
+    /// REQ_0060 (zero-alloc steady-state dispatch). `None` for
+    /// `TaskKind::Graph`, which dispatches its vertices via a separate
+    /// path and is handled by REQ_0062/REQ_0063 follow-on work.
+    pub(crate) job: Option<Box<dyn FnMut() + Send + 'static>>,
 }
 
 /// Top-level executor. One per process is the typical case.
@@ -56,6 +64,12 @@ pub struct Executor {
     pub(crate) observer: Arc<dyn Observer>,
     /// Execution monitor. Defaults to a no-op.
     pub(crate) monitor: Arc<dyn ExecutionMonitor>,
+    /// Per-iteration error capture slot — allocated once at build time and
+    /// reset to `None` at the top of each `dispatch_loop` iteration. Pool
+    /// workers obtain a refcount-only `Arc::clone` of this slot, avoiding
+    /// the per-iteration heap allocation that the previous design incurred.
+    /// Required for REQ_0060.
+    pub(crate) iter_err: Arc<std::sync::Mutex<Option<ExecutorError>>>,
 }
 
 // SAFETY: `IxListener<ipc::Service>` is `!Send` for the same Rc-based
@@ -116,10 +130,34 @@ impl Executor {
         item.declare_triggers(&mut declarer)?;
         let decls = declarer.into_decls();
 
+        let mut item_box: Box<dyn ExecutableItem> = Box::new(item);
+        let app_id = item_box.app_id();
+        let app_inst = item_box.app_instance_id();
+        // SAFETY: the raw pointer points into the heap allocation of
+        // `item_box`. `Box` keeps that allocation at a stable address even
+        // when the `Box` itself is moved (e.g. when `self.tasks` grows),
+        // so the pointer remains valid for the lifetime of the
+        // `TaskEntry`. See SendItemPtr safety doc for the rest of the
+        // discipline (barrier() pairs with worker access).
+        #[allow(unsafe_code)]
+        let item_ptr = SendItemPtr::new(item_box.as_mut() as *mut dyn ExecutableItem);
+
+        let job = build_single_job(
+            id.clone(),
+            self.stoppable.clone(),
+            Arc::clone(&self.observer),
+            Arc::clone(&self.monitor),
+            Arc::clone(&self.iter_err),
+            app_id,
+            app_inst,
+            item_ptr,
+        );
+
         self.tasks.push(TaskEntry {
             id: id.clone(),
-            kind: TaskKind::Single(Box::new(item)),
+            kind: TaskKind::Single(item_box),
             decls,
+            job: Some(job),
         });
         Ok(id)
     }
@@ -198,11 +236,57 @@ impl Executor {
             }
         }
 
+        let mut items = items;
+        // SAFETY: pointer into the chain's `items` Vec. The Vec lives
+        // inside `TaskKind::Chain` inside `TaskEntry`. The Vec's buffer
+        // is stable once `add_chain` returns — `self.tasks` may grow
+        // (moving the `Vec<Box<...>>` header itself), but the Vec's
+        // heap buffer is referenced via the header's data pointer and
+        // is unaffected by header moves. We never resize the chain Vec
+        // after this point. See SendChainPtr safety doc for the rest.
+        #[allow(unsafe_code)]
+        let chain_ptr = SendChainPtr::new(&mut items as *mut Vec<Box<dyn ExecutableItem>>);
+        // NB: the pointer above is to the local `items` Vec on the
+        // stack — it's invalid after the `push` below moves items into
+        // the TaskEntry. We rederive a stable pointer after the push.
+        // (See the rebuild step below.)
+        let _ = chain_ptr;
+
         self.tasks.push(TaskEntry {
             id: id.clone(),
             kind: TaskKind::Chain(items),
             decls,
+            job: None, // populated in the rebuild step below
         });
+
+        // After the push, the TaskEntry lives at a stable position in
+        // `self.tasks` for the duration of this `add_chain_with_id_boxed`
+        // call. Take a stable pointer to its chain Vec and build the
+        // dispatch closure. If `self.tasks` later grows, the Vec header
+        // inside the TaskEntry moves but the header's data pointer
+        // (which addresses the chain's heap buffer) does not — and the
+        // closure derefs that pointer per dispatch, so it re-reads the
+        // current heap address each time. Sound under the same
+        // discipline as `tasks_ptr` in dispatch_loop.
+        let task_idx = self.tasks.len() - 1;
+        let chain_vec_ptr: *mut Vec<Box<dyn ExecutableItem>> = match &mut self.tasks[task_idx].kind
+        {
+            TaskKind::Chain(v) => v as *mut _,
+            // The push above used TaskKind::Chain, so this arm is
+            // unreachable. Mark it explicitly to satisfy `match`.
+            _ => unreachable!("just-pushed task is TaskKind::Chain"),
+        };
+        #[allow(unsafe_code)]
+        let chain_ptr = SendChainPtr::new(chain_vec_ptr);
+        let job = build_chain_job(
+            id.clone(),
+            self.stoppable.clone(),
+            Arc::clone(&self.observer),
+            Arc::clone(&self.monitor),
+            Arc::clone(&self.iter_err),
+            chain_ptr,
+        );
+        self.tasks[task_idx].job = Some(job);
         Ok(id)
     }
 
@@ -349,6 +433,7 @@ impl ExecutorBuilder {
             stop_listener,
             observer,
             monitor,
+            iter_err: Arc::new(std::sync::Mutex::new(None)),
         };
 
         Ok(exec)
@@ -554,8 +639,11 @@ impl Executor {
         let stop_flag = self.stoppable.clone();
 
         loop {
-            let iter_err: Arc<std::sync::Mutex<Option<ExecutorError>>> =
-                Arc::new(std::sync::Mutex::new(None));
+            // Reset the pre-allocated per-iteration error slot (REQ_0060):
+            // the slot is owned by `self.iter_err`, allocated once at build
+            // time. Pool worker closures obtain a refcount-only clone of
+            // the `Arc`; the slot itself is reused across iterations.
+            *self.iter_err.lock().unwrap() = None;
 
             // SAFETY: we capture &mut self.tasks via a raw pointer because
             // wait_and_process expects FnMut and Rust can't see the closure
@@ -573,9 +661,14 @@ impl Executor {
             //      stable for the lifetime of `dispatch_loop`.
             let tasks_ptr = &mut self.tasks as *mut Vec<TaskEntry>;
             let pool = &self.pool;
-            let stoppable_inner = self.stoppable.clone();
-            let observer_inner = Arc::clone(&self.observer);
-            let monitor_inner = Arc::clone(&self.monitor);
+            // Refcount-only clone of the pre-allocated error slot. Pool jobs
+            // need a `'static` handle, and an `Arc::clone` does not allocate.
+            // The Single/Chain paths use the closure baked into `task.job`,
+            // which already captured stable Arc clones at `add`-time; the
+            // Graph path uses closures pre-built by `prepare_dispatch`. Only
+            // the error-aggregation logic on the WaitSet thread still needs
+            // the slot here.
+            let iter_err_inner = Arc::clone(&self.iter_err);
             // Raw pointer to the stop listener for draining inside the callback.
             // SAFETY: same as stop_listener_ref above — the Arc is alive for
             // the lifetime of dispatch_loop.
@@ -604,106 +697,46 @@ impl Executor {
                         // dispatch_loop. The pointer is valid for the
                         // duration of this closure.
                         let task = unsafe { &mut (&mut *tasks_ptr)[task_idx] };
-                        let id = task.id.clone();
-                        let stop = stoppable_inner.clone();
-                        let err_slot = Arc::clone(&iter_err);
-                        let obs = Arc::clone(&observer_inner);
-                        let mon = Arc::clone(&monitor_inner);
 
                         match &mut task.kind {
-                            TaskKind::Single(item_box) => {
-                                // Collect app metadata before moving the pointer.
-                                let app_id = item_box.app_id();
-                                let app_inst = item_box.app_instance_id();
-                                // SAFETY: SendItemPtr safety doc above. barrier()
-                                // guarantees exclusive access within each iteration.
-                                let item_ptr = SendItemPtr::new(item_box.as_mut() as *mut _);
-                                pool.submit(move || {
-                                    let mut ctx =
-                                        crate::context::Context::new(&id, &stop, obs.as_ref());
-                                    if let Some(aid) = app_id {
-                                        obs.on_app_start(id.clone(), aid, app_inst);
-                                    }
-                                    // item_ptr.get() is a method call — Rust 2021
-                                    // per-field capture analysis captures the whole
-                                    // SendItemPtr (Send) rather than the inner raw
-                                    // pointer field (not Send by default).
-                                    let raw = item_ptr.get();
-                                    // SAFETY: pool.barrier() (below) is called
-                                    // before we leave the callback scope, so
-                                    // the borrow of item_box is bounded to this
-                                    // iteration.
-                                    let started = std::time::Instant::now();
-                                    mon.pre_execute(id.clone(), started);
-                                    let res = run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
-                                    let took = started.elapsed();
-                                    mon.post_execute(id.clone(), started, took, res.is_ok());
-                                    if let Err(ref e) = res {
-                                        obs.on_app_error(id.clone(), e.as_ref());
-                                    }
-                                    if app_id.is_some() {
-                                        obs.on_app_stop(id.clone());
-                                    }
-                                    record_first_err(&err_slot, &id, res);
-                                });
-                            }
-                            TaskKind::Chain(items) => {
-                                // Collect app metadata for each chain item before moving pointers.
-                                let item_meta: Vec<(Option<u32>, Option<u32>)> = items
-                                    .iter()
-                                    .map(|b| (b.app_id(), b.app_instance_id()))
-                                    .collect();
-                                let item_ptrs: Vec<SendItemPtr> = items
-                                    .iter_mut()
-                                    .map(|b| SendItemPtr::new(b.as_mut() as *mut _))
-                                    .collect();
-                                pool.submit(move || {
-                                    let mut ctx =
-                                        crate::context::Context::new(&id, &stop, obs.as_ref());
-                                    for (ptr, (app_id, app_inst)) in
-                                        item_ptrs.into_iter().zip(item_meta)
-                                    {
-                                        if let Some(aid) = app_id {
-                                            obs.on_app_start(id.clone(), aid, app_inst);
-                                        }
-                                        // SAFETY: pool.barrier() (below) is called
-                                        // before we leave the callback scope, so
-                                        // the borrows are bounded to this iteration.
-                                        let raw = ptr.get();
-                                        let started = std::time::Instant::now();
-                                        mon.pre_execute(id.clone(), started);
-                                        let res =
-                                            run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
-                                        let took = started.elapsed();
-                                        mon.post_execute(id.clone(), started, took, res.is_ok());
-                                        if let Err(ref e) = res {
-                                            obs.on_app_error(id.clone(), e.as_ref());
-                                        }
-                                        if app_id.is_some() {
-                                            obs.on_app_stop(id.clone());
-                                        }
-                                        match res {
-                                            Ok(crate::ControlFlow::Continue) => {}
-                                            Ok(crate::ControlFlow::StopChain) => break,
-                                            Err(_) => {
-                                                record_first_err(&err_slot, &id, res);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                });
+                            TaskKind::Single(_) | TaskKind::Chain(_) => {
+                                // The dispatch closure was pre-allocated at
+                                // task-add time and stashed on `task.job`.
+                                // Submit it via `submit_borrowed` — no
+                                // per-iteration Box allocation. Required by
+                                // REQ_0060.
+                                let job_box = task
+                                    .job
+                                    .as_deref_mut()
+                                    .expect("Single/Chain tasks carry a pre-built job");
+                                let job_ptr: *mut (dyn FnMut() + Send) =
+                                    job_box as *mut (dyn FnMut() + Send);
+                                // SAFETY: the closure lives in
+                                // `task.job` which is owned by
+                                // `self.tasks[task_idx]`; `tasks_ptr` is
+                                // sound for the duration of this
+                                // callback. `pool.barrier()` below
+                                // finishes the closure invocation before
+                                // we re-enter the next iteration's
+                                // callback. The WaitSet thread does not
+                                // touch the closure between this submit
+                                // and that barrier.
+                                #[allow(unsafe_code)]
+                                unsafe {
+                                    pool.submit_borrowed(crate::pool::BorrowedJob::new(job_ptr));
+                                }
                             }
                             TaskKind::Graph(graph) => {
                                 // Outer driver runs on the WaitSet thread; vertices run on the
-                                // pool. This avoids deadlock when worker_threads == 1 because
-                                // the WaitSet thread is NOT a pool worker.
-                                let pool_arc = Arc::clone(pool);
-                                let outcome = graph.run_once(&pool_arc, &id, &stop, &obs, &mon);
+                                // pool. The graph holds its own pre-built per-vertex closures
+                                // and SPSC ready ring (REQ_0060), so dispatch is allocation-free
+                                // in steady state.
+                                let outcome = graph.run_once_borrowed(pool);
                                 if let Some(source) = outcome.error {
-                                    let mut g = err_slot.lock().unwrap();
+                                    let mut g = iter_err_inner.lock().unwrap();
                                     if g.is_none() {
                                         *g = Some(ExecutorError::Item {
-                                            task_id: id.clone(),
+                                            task_id: task.id.clone(),
                                             source,
                                         });
                                     }
@@ -733,7 +766,7 @@ impl Executor {
 
             // Extract the error before dropping the MutexGuard — avoids
             // holding the lock across the return (clippy::significant_drop_in_scrutinee).
-            let maybe_err = iter_err.lock().unwrap().take();
+            let maybe_err = self.iter_err.lock().unwrap().take();
             if let Some(err) = maybe_err {
                 return Err(err);
             }
@@ -780,17 +813,143 @@ impl SendItemPtr {
         Self { ptr }
     }
 
-    /// Returns the raw pointer. Call inside the closure so that Rust 2021
-    /// per-field capture analysis captures `self` (the whole `SendItemPtr`,
-    /// which is `Send`) rather than `self.ptr` (which is not `Send`).
-    fn get(self) -> *mut dyn ExecutableItem {
+    /// Returns the raw pointer. Takes `&self` so the wrapper can be invoked
+    /// repeatedly from an `FnMut` dispatch closure (REQ_0060 requires the
+    /// dispatch closure to be reusable across iterations without allocation).
+    fn get(&self) -> *mut dyn ExecutableItem {
         self.ptr
     }
 }
 
-// SAFETY: see doc comment above.
+// SAFETY: see doc comment above. `Sync` is required so the FnMut dispatch
+// closure can borrow `&SendItemPtr` per invocation without making the
+// closure itself `!Send`.
 #[allow(unsafe_code)]
 unsafe impl Send for SendItemPtr {}
+#[allow(unsafe_code)]
+unsafe impl Sync for SendItemPtr {}
+
+/// Wraps a `*mut Vec<Box<dyn ExecutableItem>>` so a chain dispatch
+/// closure can iterate the chain's items in place without first
+/// collecting them into a freshly-allocated `Vec`. The send is safe
+/// for the same reason as [`SendItemPtr`] (see above): the executor
+/// holds `&mut self` for the duration of `dispatch_loop`, and the
+/// `pool.barrier()` at the end of each callback ensures the closure
+/// has finished using this pointer before the Vec could be touched
+/// from the WaitSet thread again. The Vec is never resized after
+/// dispatch begins. Required for REQ_0060 — chain dispatch must not
+/// allocate per iteration.
+#[allow(unsafe_code)]
+struct SendChainPtr {
+    ptr: *mut Vec<Box<dyn ExecutableItem>>,
+}
+
+impl SendChainPtr {
+    fn new(ptr: *mut Vec<Box<dyn ExecutableItem>>) -> Self {
+        Self { ptr }
+    }
+
+    fn get(&self) -> *mut Vec<Box<dyn ExecutableItem>> {
+        self.ptr
+    }
+}
+
+// SAFETY: see doc comment above. `Sync` lets the FnMut dispatch closure
+// borrow `&SendChainPtr` per invocation while staying `Send`.
+#[allow(unsafe_code)]
+unsafe impl Send for SendChainPtr {}
+#[allow(unsafe_code)]
+unsafe impl Sync for SendChainPtr {}
+
+/// Build the per-iteration dispatch closure for a `TaskKind::Single`.
+///
+/// The returned closure is stored on `TaskEntry::job` and invoked once
+/// per dispatch via `Pool::submit_borrowed`, which (unlike `submit`)
+/// performs no allocation. The closure captures Arc clones of the
+/// executor's shared state — those clones are refcount-only at build
+/// time and are reused on every dispatch. Required for REQ_0060.
+#[allow(clippy::too_many_arguments)]
+fn build_single_job(
+    id: TaskId,
+    stop: Stoppable,
+    obs: Arc<dyn Observer>,
+    mon: Arc<dyn ExecutionMonitor>,
+    err_slot: Arc<std::sync::Mutex<Option<ExecutorError>>>,
+    app_id: Option<u32>,
+    app_inst: Option<u32>,
+    item_ptr: SendItemPtr,
+) -> Box<dyn FnMut() + Send + 'static> {
+    Box::new(move || {
+        let mut ctx = crate::context::Context::new(&id, &stop, obs.as_ref());
+        if let Some(aid) = app_id {
+            obs.on_app_start(id.clone(), aid, app_inst);
+        }
+        let raw = item_ptr.get();
+        let started = std::time::Instant::now();
+        mon.pre_execute(id.clone(), started);
+        // SAFETY: barrier() pairs with this invocation; the WaitSet
+        // thread does not touch the item between `submit_borrowed` and
+        // the matching `barrier()`. See SendItemPtr safety doc.
+        #[allow(unsafe_code)]
+        let res = run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
+        let took = started.elapsed();
+        mon.post_execute(id.clone(), started, took, res.is_ok());
+        if let Err(ref e) = res {
+            obs.on_app_error(id.clone(), e.as_ref());
+        }
+        if app_id.is_some() {
+            obs.on_app_stop(id.clone());
+        }
+        record_first_err(&err_slot, &id, res);
+    })
+}
+
+/// Build the per-iteration dispatch closure for a `TaskKind::Chain`.
+fn build_chain_job(
+    id: TaskId,
+    stop: Stoppable,
+    obs: Arc<dyn Observer>,
+    mon: Arc<dyn ExecutionMonitor>,
+    err_slot: Arc<std::sync::Mutex<Option<ExecutorError>>>,
+    chain_ptr: SendChainPtr,
+) -> Box<dyn FnMut() + Send + 'static> {
+    Box::new(move || {
+        let mut ctx = crate::context::Context::new(&id, &stop, obs.as_ref());
+        // SAFETY: barrier() pairs with this invocation; the chain Vec
+        // and the items it owns are not touched by the WaitSet thread
+        // until barrier() returns. See SendChainPtr safety doc.
+        #[allow(unsafe_code)]
+        let chain_items = unsafe { &mut *chain_ptr.get() };
+        for item_box in chain_items.iter_mut() {
+            let app_id = item_box.app_id();
+            let app_inst = item_box.app_instance_id();
+            if let Some(aid) = app_id {
+                obs.on_app_start(id.clone(), aid, app_inst);
+            }
+            let raw = item_box.as_mut() as *mut dyn ExecutableItem;
+            let started = std::time::Instant::now();
+            mon.pre_execute(id.clone(), started);
+            #[allow(unsafe_code)]
+            let res = run_item_catch_unwind(unsafe { &mut *raw }, &mut ctx);
+            let took = started.elapsed();
+            mon.post_execute(id.clone(), started, took, res.is_ok());
+            if let Err(ref e) = res {
+                obs.on_app_error(id.clone(), e.as_ref());
+            }
+            if app_id.is_some() {
+                obs.on_app_stop(id.clone());
+            }
+            match res {
+                Ok(crate::ControlFlow::Continue) => {}
+                Ok(crate::ControlFlow::StopChain) => break,
+                Err(_) => {
+                    record_first_err(&err_slot, &id, res);
+                    break;
+                }
+            }
+        }
+    })
+}
 
 #[derive(Debug)]
 struct PanickedTask(String);
@@ -904,10 +1063,28 @@ impl ExecutorGraphBuilder<'_> {
             .or(self.custom_id)
             .unwrap_or_else(auto_id);
         let decls = g.decls.clone();
+
+        // Box the graph for address stability — per-vertex dispatch
+        // closures capture `*const Graph` and must not see it move.
+        let mut graph_box: Box<crate::graph::Graph> = Box::new(g);
+        // Pre-build the per-vertex closures now that we know the
+        // task_id and have access to the executor's shared state.
+        graph_box.prepare_dispatch(
+            id.clone(),
+            self.executor.stoppable.clone(),
+            Arc::clone(&self.executor.observer),
+            Arc::clone(&self.executor.monitor),
+            Arc::clone(&self.executor.iter_err),
+        );
+
         self.executor.tasks.push(TaskEntry {
             id: id.clone(),
-            kind: TaskKind::Graph(g),
+            kind: TaskKind::Graph(graph_box),
             decls,
+            // Graph tasks dispatch their vertices via `vertex_jobs`
+            // stored inside the `Graph`; the per-task `job` slot
+            // is unused for graphs.
+            job: None,
         });
         Ok(id)
     }

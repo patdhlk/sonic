@@ -30,6 +30,7 @@ mod monitor;
 mod observer;
 mod payload;
 mod pool;
+mod ready_ring;
 mod runner;
 mod service;
 pub mod signal_slot;
