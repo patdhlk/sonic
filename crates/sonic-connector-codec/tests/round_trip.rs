@@ -2,6 +2,7 @@
 //! every input the codec accepts, `encode` followed by `decode` yields
 //! a value equal to the original (`REQ_0210`, `REQ_0212`).
 
+#![cfg(feature = "json")]
 #![allow(clippy::doc_markdown)]
 
 use proptest::prelude::*;

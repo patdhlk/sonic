@@ -3,6 +3,7 @@
 //! [`PayloadCodec::format_name`] and underlying serializer error)
 //! rather than silently dropping the envelope (`REQ_0214`).
 
+#![cfg(feature = "json")]
 #![allow(clippy::doc_markdown)]
 
 use serde::Deserialize;

@@ -11,6 +11,7 @@
 //! `ChannelWriter::send`'s contract (TEST_0125, REQ_0323) — both
 //! surface buffer overflow as `PayloadOverflow`, never as `Codec`.
 
+#![cfg(feature = "json")]
 #![allow(clippy::doc_markdown)]
 
 use serde::Serialize;
