@@ -62,4 +62,33 @@ pub trait BusDriver: Send + 'static {
     fn cycle(
         &mut self,
     ) -> impl core::future::Future<Output = Result<u16, ConnectorError>> + Send + '_;
+
+    /// Visit one SubDevice's outputs slice with mutable access.
+    /// Used by the gateway dispatcher (C7b) to write outbound
+    /// payloads before [`Self::cycle`] (`REQ_0326`).
+    ///
+    /// Returns `Some(f(buf))` when a SubDevice with the given
+    /// configured address exists; `None` when the driver is
+    /// pre-bring-up or no matching SubDevice was discovered.
+    ///
+    /// Callback shape (rather than returning `&mut [u8]`) lets
+    /// `ethercrab` keep the slice scoped to its
+    /// internal `PdiWriteGuard` — the guard drops when `f`
+    /// returns, releasing the PDI's RwLock. The bit offsets in
+    /// [`crate::routing::EthercatRouting`] are relative to byte 0
+    /// of the slice the callback sees.
+    fn with_subdevice_outputs_mut<R>(
+        &self,
+        subdevice_address: u16,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R>;
+
+    /// Visit one SubDevice's inputs slice with read access. Same
+    /// callback shape and return contract as
+    /// [`Self::with_subdevice_outputs_mut`] (`REQ_0327`).
+    fn with_subdevice_inputs<R>(
+        &self,
+        subdevice_address: u16,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Option<R>;
 }

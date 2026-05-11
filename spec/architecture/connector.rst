@@ -1617,11 +1617,11 @@ spec text that needed amendment during implementation.
    ``HealthSubscription`` delivers events published on the
    connector's internal health channel.
 
-.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c + C5d + C5e)
+.. impl:: sonic-connector-ethercat crate (C5a–C5e + C7a)
    :id: IMPL_0050
    :status: open
    :implements: BB_0030
-   :refines: REQ_0310, REQ_0311, REQ_0312, REQ_0313, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324, REQ_0325
+   :refines: REQ_0310, REQ_0311, REQ_0312, REQ_0313, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324, REQ_0325, REQ_0326, REQ_0327, REQ_0328
 
    **Crate.** ``crates/sonic-connector-ethercat``. Default deps:
    ``sonic-connector-core``, ``sonic-connector-transport-iox``,
@@ -1713,31 +1713,50 @@ spec text that needed amendment during implementation.
      bring-up + per-cycle operations the runner needs from a
      concrete back-end (`REQ_0312` / `REQ_0313` / `REQ_0315`
      are encoded in the contract; concrete impls cover them).
+     C7a extends the trait with callback-shaped
+     ``with_subdevice_outputs_mut`` / ``with_subdevice_inputs``
+     methods that expose one SubDevice's PDI region; the
+     callback shape keeps ethercrab's internal `PdiWriteGuard`
+     lifetime scoped to the impl (`REQ_0326`, `REQ_0327`).
    * ``mock::MockBusDriver`` — programmable test fixture: WKC
      sequences, configurable bring-up response, bring-up
-     failure injection. In-tree so downstream connector crates
-     can compose with it.
+     failure injection. C7a extends with per-SubDevice
+     PDI buffers (``with_subdevice_outputs`` /
+     ``with_subdevice_inputs`` builders + ``Mutex``-backed
+     interior storage for the callback methods).
    * ``runner::CycleRunner<D: BusDriver>`` — composes
      ``CycleScheduler`` + ``BusDriver`` + ``evaluate_wkc`` +
      ``EthercatHealthMonitor``. End-to-end tested via
-     ``MockBusDriver``: bring-up transitions ``Connecting → Up``,
-     matching WKC keeps the connector ``Up``, mismatching WKC
-     transitions to ``Degraded`` with the offending cycle index
-     in the reason, scheduler enforces skip-not-catch-up across
-     ``tick`` calls, observed ``HealthEvent`` sequence matches
-     the expected ``Up → Degraded → Up`` pattern over a wkc
-     sequence.
+     ``MockBusDriver``.
+   * ``pdi::write_routing`` / ``pdi::read_routing`` — pure-logic
+     bit-slice translation between a per-SubDevice PDI buffer
+     and a codec-encoded byte payload, honouring REQ_0311's
+     ``bit_offset`` / ``bit_length``. Read-modify-write on
+     partial leading / trailing bytes preserves adjacent
+     slices (``REQ_0326``, ``REQ_0327``).
+   * ``registry::ChannelRegistry`` — Vec-backed registry of
+     ``RegisteredChannel { descriptor_name, routing,
+     direction, binding }``. Insertion-order iteration verified
+     by TEST_0219; per-cycle ``iter()`` is allocation-free
+     (verified via ``CountingAllocator`` across 1 000 cycles ×
+     16 channels — ``REQ_0328``).
 
-   **Verification posture.** All 16 REQs covered by IMPL_0050
+   **Verification posture.** All 19 REQs covered by IMPL_0050
    have a passing unit / integration test on every CI push *via
-   the* ``MockBusDriver``. ``EthercrabBusDriver`` provides the
-   real-bus path for REQ_0312 (single MainDevice — one
-   ``PduStorage::try_split`` per driver), REQ_0313 (bus reaches
-   OP — ``group.into_op`` fast path), REQ_0314 + REQ_0315 (PDO
-   mapping applied via ``pdo_sdo_writes`` + ``sdo_write`` during
-   PRE-OP), and REQ_0325 (Linux raw socket — ``tx_rx_task``).
-   These code paths are compile-checked but await on-the-wire
-   verification once hardware is available.
+   the* ``MockBusDriver`` and the pure-logic PDI / registry
+   helpers. ``EthercrabBusDriver`` provides the real-bus path for
+   REQ_0312 (single MainDevice — one ``PduStorage::try_split``
+   per driver), REQ_0313 (bus reaches OP — ``group.into_op``
+   fast path), REQ_0314 + REQ_0315 (PDO mapping applied via
+   ``pdo_sdo_writes`` + ``sdo_write`` during PRE-OP), and
+   REQ_0325 (Linux raw socket — ``tx_rx_task``). REQ_0326 /
+   REQ_0327's actual byte hops between iceoryx2 channels and
+   PDI buffers — the gateway-side dispatcher — is **deferred
+   to C7b**; C7a's pure-logic PDI translation + C5d's mock
+   driver verify the load-bearing logic, but the iceoryx2
+   ↔ PDI plumbing in the gateway's ``register_with`` still
+   carries a no-op stub item. C5e's hardware tests under
+   ``ETHERCAT_TEST_NIC`` continue to await physical hardware.
 
    **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
    TEST_0204 + TEST_0206 (options builder), TEST_0205-partial

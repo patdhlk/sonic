@@ -31,6 +31,8 @@ ethercrab                      = { workspace = true, optional = true }
 
 [dev-dependencies]
 sonic-connector-codec = { path = "../sonic-connector-codec" }
+sonic-bounded-alloc   = { path = "../sonic-bounded-alloc" }
+proptest              = { workspace = true }
 
 [lints.rust]
 unsafe_code  = "deny"

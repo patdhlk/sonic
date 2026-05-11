@@ -47,6 +47,8 @@ pub mod gateway;
 pub mod health;
 pub mod mock;
 pub mod options;
+pub mod pdi;
+pub mod registry;
 pub mod routing;
 pub mod runner;
 pub mod scheduler;
@@ -64,6 +66,7 @@ pub use mock::MockBusDriver;
 pub use options::{
     EthercatConnectorOptions, EthercatConnectorOptionsBuilder, PdoEntry, SubDeviceMap,
 };
+pub use registry::{ChannelBinding, ChannelHandle, ChannelRegistry, RegisteredChannel};
 pub use routing::{EthercatRouting, PdoDirection};
 pub use runner::{CycleReport, CycleRunner};
 pub use scheduler::{CycleDecision, CycleScheduler};

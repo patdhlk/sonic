@@ -226,6 +226,46 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize> BusDriver
         let response = op.group.tx_rx(&op.maindevice).await.map_err(map_ec_error)?;
         Ok(response.working_counter)
     }
+
+    fn with_subdevice_outputs_mut<R>(
+        &self,
+        subdevice_address: u16,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R> {
+        let State::Operational(op) = &self.state else {
+            return None;
+        };
+        for sd in op.group.iter(&op.maindevice) {
+            if sd.configured_address() == subdevice_address {
+                // `outputs_raw_mut` returns a `PdiWriteGuard` that
+                // holds ethercrab's internal RwLock. The guard drops
+                // when this scope ends, releasing the lock. The
+                // closure operates on the deref'd slice while the
+                // guard is alive — that's why this method's signature
+                // is callback-shaped rather than returning `&mut [u8]`.
+                let mut guard = sd.outputs_raw_mut();
+                return Some(f(&mut guard));
+            }
+        }
+        None
+    }
+
+    fn with_subdevice_inputs<R>(
+        &self,
+        subdevice_address: u16,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Option<R> {
+        let State::Operational(op) = &self.state else {
+            return None;
+        };
+        for sd in op.group.iter(&op.maindevice) {
+            if sd.configured_address() == subdevice_address {
+                let guard = sd.inputs_raw();
+                return Some(f(&guard));
+            }
+        }
+        None
+    }
 }
 
 /// Apply the SDO write sequence for one `SubDeviceMap`. Locates the
