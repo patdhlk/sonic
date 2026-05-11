@@ -684,10 +684,16 @@ EtherCAT reference connector
    shall, for every registered inbound channel, extract
    ``bit_length`` bits starting at ``bit_offset`` from the SubDevice's
    process image inputs region (per the channel's
-   :need:`REQ_0311` ``EthercatRouting``), decode the resulting byte
-   slice via the channel's codec, and publish the decoded value on
-   the channel's inbound iceoryx2 service. Reads shall not modify the
-   PDI buffer.
+   :need:`REQ_0311` ``EthercatRouting``), and publish the resulting
+   byte slice on the channel's inbound iceoryx2 service as a
+   ``ConnectorEnvelope`` whose ``payload_len`` is
+   ``ceil(bit_length / 8)``. The gateway shall **not** invoke the
+   channel's codec on this path — codec decoding is the
+   responsibility of the plugin-side ``ChannelReader::try_recv``,
+   keeping the gateway a byte-only mover (symmetric with
+   :need:`REQ_0326`, where the plugin's ``ChannelWriter::send``
+   encodes and the gateway moves the already-encoded bytes). Reads
+   shall not modify the PDI buffer.
 
 .. req:: Per-channel routing registry on the gateway
    :id: REQ_0328
