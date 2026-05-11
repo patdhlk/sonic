@@ -1617,27 +1617,46 @@ spec text that needed amendment during implementation.
    ``HealthSubscription`` delivers events published on the
    connector's internal health channel.
 
-.. impl:: sonic-connector-ethercat crate (C5a + C5b)
+.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c)
    :id: IMPL_0050
    :status: open
    :implements: BB_0030
    :refines: REQ_0310, REQ_0311, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324
 
-   **Crate.** ``crates/sonic-connector-ethercat``. Depends on
+   **Crate.** ``crates/sonic-connector-ethercat``. Default deps:
    ``sonic-connector-core``, ``sonic-connector-transport-iox``,
    ``sonic-connector-host``, ``sonic-executor``,
    ``crossbeam-channel``, ``tokio`` (``rt`` +
-   ``rt-multi-thread`` + ``macros`` + ``sync``).
+   ``rt-multi-thread`` + ``macros`` + ``sync``). Optional
+   ``ethercrab`` dep behind the default-off ``bus-integration``
+   cargo feature.
 
-   **Status.** C5a + C5b together land the protocol-agnostic
-   core: routing, options builder, bridges, health monitor,
-   tokio runtime lifecycle, ``Connector`` trait impl, and the
+   **Status.** C5a + C5b land the protocol-agnostic core:
+   routing, options builder, bridges, health monitor, tokio
+   runtime lifecycle, ``Connector`` trait impl, and the
    pure-logic helpers (``sdo`` / ``scheduler`` / ``wkc``) that
-   carry the gateway's load-bearing decision logic. C5c —
-   tracked separately — adds the ``ethercrab`` dependency,
-   wires ``MainDevice`` into ``EthercatGateway``, spawns
-   ``tx_rx_task``, and integrates the pure-logic helpers
-   against a real bus.
+   carry the gateway's load-bearing decision logic. C5c pulls
+   ``ethercrab`` 0.7 as an optional dep and ships the
+   forward-compatible declarations (``bus::EthercatPduStorage``
+   type alias + ``declare_pdu_storage!`` macro) every
+   application that wants real-bus deployment needs to declare
+   anyway. The cycle-loop wiring against
+   ``ethercrab::MainDevice`` was scoped to C5c but pulled back
+   when ``ethercrab`` 0.7's actual API surface diverged from the
+   examples reachable via documentation search; writing 1000+
+   lines of speculative integration code against an API the
+   author can't iterate against would have produced code that
+   compiles but whose runtime behaviour is unverified — exactly
+   the trust-me-but-untested posture the framework otherwise
+   avoids.
+
+   The remaining wiring is tracked as a follow-on commit
+   ("C5d") that lands when a developer with ``CAP_NET_RAW`` on a
+   Linux gateway host can iterate the bring-up code against a
+   real bus, *or* when the project moves to a ``BusDriver``
+   trait abstraction with a ``MockBusDriver`` in
+   ``dev-dependencies`` (the latter is the simpler path if real
+   hardware remains unavailable).
 
    **Surface.**
 
@@ -1678,11 +1697,14 @@ spec text that needed amendment during implementation.
    * ``wkc::evaluate_wkc`` + ``WkcVerdict::degraded_reason`` —
      working-counter health policy (``REQ_0319``, ``REQ_0320``).
 
-   **Not yet refined by IMPL_0050 (deferred to C5c).** REQ_0312
-   (single MainDevice per gateway), REQ_0313 (bus reaches OP
-   before traffic), REQ_0325 (Linux raw socket / CAP_NET_RAW).
-   All three require the ``ethercrab`` integration; they remain
-   ``open`` until C5c.
+   **Not yet refined by IMPL_0050.** REQ_0312 (single
+   MainDevice per gateway), REQ_0313 (bus reaches OP before
+   traffic), REQ_0325 (Linux raw socket / CAP_NET_RAW). All
+   three require the ``ethercrab`` cycle-loop wiring; the
+   forward-compatible ``bus`` module ships the type alias +
+   macro for the storage hand-off, but the runtime
+   ``MainDevice`` ownership and ``tx_rx_task`` spawn are the
+   load-bearing parts and remain in the C5d follow-on.
 
    **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
    TEST_0204 + TEST_0206 (options builder), TEST_0205-partial

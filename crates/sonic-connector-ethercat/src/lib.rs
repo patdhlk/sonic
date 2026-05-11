@@ -37,6 +37,8 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod bridge;
+#[cfg(feature = "bus-integration")]
+pub mod bus;
 pub mod connector;
 pub mod gateway;
 pub mod health;

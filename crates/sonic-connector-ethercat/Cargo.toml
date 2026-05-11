@@ -8,6 +8,15 @@ repository   = { workspace = true }
 authors      = { workspace = true }
 description  = "EtherCAT reference connector for the sonic-connector framework. Implements BB_0030 (FEAT_0041)."
 
+[features]
+default = []
+# `bus-integration` pulls `ethercrab` and exposes the `bus_driver`
+# module that wires the pure-logic helpers (sdo / scheduler / wkc)
+# to a real EtherCAT MainDevice. Off by default so consumers that
+# only want the framework types and pure-logic helpers don't pull
+# ethercrab's transitive dependencies.
+bus-integration = ["dep:ethercrab"]
+
 [dependencies]
 sonic-connector-core           = { path = "../sonic-connector-core" }
 sonic-connector-transport-iox  = { path = "../sonic-connector-transport-iox" }
@@ -18,6 +27,7 @@ crossbeam-channel              = { workspace = true }
 tokio                          = { workspace = true }
 serde                          = { workspace = true, features = ["std"] }
 thiserror                      = { workspace = true }
+ethercrab                      = { workspace = true, optional = true }
 
 [dev-dependencies]
 sonic-connector-codec = { path = "../sonic-connector-codec" }
