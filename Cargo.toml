@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sonic-bounded-alloc",
     "crates/sonic-connector-core",
+    "crates/sonic-connector-transport-iox",
     "crates/sonic-executor",
     "crates/sonic-executor-tracing",
     "crates/sonic-replay",
@@ -31,3 +32,4 @@ rand              = { version = "0.8", default-features = false, features = ["st
 # dev-only
 proptest          = "1"
 loom              = "0.7"
+serde_json        = "1"

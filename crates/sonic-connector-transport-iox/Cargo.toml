@@ -1,0 +1,30 @@
+[package]
+name         = "sonic-connector-transport-iox"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "iceoryx2-backed envelope and channel transport for the sonic-connector framework. Implements BB_0002."
+
+[dependencies]
+sonic-connector-core = { path = "../sonic-connector-core" }
+iceoryx2             = { workspace = true }
+serde                = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+serde      = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true }
+
+[lints.rust]
+unsafe_code  = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
+missing_errors_doc      = "allow"
+missing_safety_doc      = "allow"
