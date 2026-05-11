@@ -1617,11 +1617,11 @@ spec text that needed amendment during implementation.
    ``HealthSubscription`` delivers events published on the
    connector's internal health channel.
 
-.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c + C5d)
+.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c + C5d + C5e)
    :id: IMPL_0050
    :status: open
    :implements: BB_0030
-   :refines: REQ_0310, REQ_0311, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324
+   :refines: REQ_0310, REQ_0311, REQ_0312, REQ_0313, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324, REQ_0325
 
    **Crate.** ``crates/sonic-connector-ethercat``. Default deps:
    ``sonic-connector-core``, ``sonic-connector-transport-iox``,
@@ -1650,17 +1650,26 @@ spec text that needed amendment during implementation.
    the trust-me-but-untested posture the framework otherwise
    avoids.
 
-   C5d takes the second path: defines the [``BusDriver``] trait
+   C5d takes the second path: defines the ``BusDriver`` trait
    that abstracts over "the operations the cycle loop needs from a
-   real EtherCAT bus", ships an in-tree [``MockBusDriver``] that
+   real EtherCAT bus", ships an in-tree ``MockBusDriver`` that
    makes the cycle loop exhaustively testable without hardware,
-   and a [``CycleRunner``] that composes ``CycleScheduler``,
+   and a ``CycleRunner`` that composes ``CycleScheduler``,
    ``BusDriver``, ``evaluate_wkc``, and ``EthercatHealthMonitor``
-   into one cycle-driving unit. The real ``EthercrabBusDriver``
-   that wraps ``ethercrab::MainDevice`` is tracked as C5e — its
-   compile-checked structure lands once the API surface settles
-   enough to wire without hardware iteration, and its on-the-wire
-   verification still requires ``ETHERCAT_TEST_NIC``.
+   into one cycle-driving unit.
+
+   C5e lands ``EthercrabBusDriver`` — a concrete ``BusDriver``
+   wrapping ``ethercrab::MainDevice`` against ethercrab 0.7's
+   API. The integration is **compile-checked only**: no EtherCAT
+   hardware is available at the time of authoring, so runtime
+   behaviour is unverified. The hardware-gated integration test
+   under ``tests/ethercrab_driver.rs`` (``#[ignore]``-marked,
+   gated on ``ETHERCAT_TEST_NIC``) documents the bring-up + cycle
+   pattern and is one ``--ignored`` flag away from running on a
+   Linux gateway host with ``CAP_NET_RAW``. End-to-end
+   verification waits on hardware arrival and a follow-on commit
+   to capture any API mismatches surfaced by the first real-bus
+   run.
 
    **Surface.**
 
@@ -1719,15 +1728,16 @@ spec text that needed amendment during implementation.
      the expected ``Up → Degraded → Up`` pattern over a wkc
      sequence.
 
-   **Not yet refined by IMPL_0050.** REQ_0312 (single
-   MainDevice per gateway), REQ_0313 (bus reaches OP before
-   traffic), REQ_0325 (Linux raw socket / CAP_NET_RAW). All
-   three are encoded in the ``BusDriver`` trait's contract
-   ("a bring-up that succeeds transitions an actual bus to
-   OP via one MainDevice over CAP_NET_RAW"); they remain
-   ``open`` until C5e ships ``EthercrabBusDriver`` and lets
-   the bus-side ``ETHERCAT_TEST_NIC`` integration tests
-   provide the on-the-wire verification.
+   **Verification posture.** All 16 REQs covered by IMPL_0050
+   have a passing unit / integration test on every CI push *via
+   the* ``MockBusDriver``. ``EthercrabBusDriver`` provides the
+   real-bus path for REQ_0312 (single MainDevice — one
+   ``PduStorage::try_split`` per driver), REQ_0313 (bus reaches
+   OP — ``group.into_op`` fast path), REQ_0314 + REQ_0315 (PDO
+   mapping applied via ``pdo_sdo_writes`` + ``sdo_write`` during
+   PRE-OP), and REQ_0325 (Linux raw socket — ``tx_rx_task``).
+   These code paths are compile-checked but await on-the-wire
+   verification once hardware is available.
 
    **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
    TEST_0204 + TEST_0206 (options builder), TEST_0205-partial

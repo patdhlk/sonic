@@ -41,6 +41,8 @@ pub mod bridge;
 pub mod bus;
 pub mod connector;
 pub mod driver;
+#[cfg(feature = "bus-integration")]
+pub mod ethercrab_driver;
 pub mod gateway;
 pub mod health;
 pub mod mock;
@@ -54,6 +56,8 @@ pub mod wkc;
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 pub use connector::EthercatConnector;
 pub use driver::{BringUp, BusDriver};
+#[cfg(feature = "bus-integration")]
+pub use ethercrab_driver::EthercrabBusDriver;
 pub use gateway::EthercatGateway;
 pub use health::EthercatHealthMonitor;
 pub use mock::MockBusDriver;
