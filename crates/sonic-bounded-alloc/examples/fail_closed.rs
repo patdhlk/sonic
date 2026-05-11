@@ -21,6 +21,7 @@
 //! `memory allocation of N bytes failed` followed by abort.
 
 #![allow(missing_docs)]
+#![allow(clippy::doc_markdown)]
 
 use sonic_bounded_alloc::declare_global_allocator;
 
@@ -39,14 +40,15 @@ fn main() {
     println!();
 
     let mut held: Vec<Box<[u8; 1024]>> = Vec::new();
-    for i in 0..64 {
+    for i in 0_u32..64 {
         let b: Box<[u8; 1024]> = Box::new([(i & 0xff) as u8; 1024]);
         held.push(b);
         println!(
-            "iter {i}: alloc_count={}, live={}, peak={}",
+            "iter {i}: alloc_count={}, live={}, peak={}, held={}",
             ALLOC.alloc_count(),
             ALLOC.live_blocks(),
-            ALLOC.peak_blocks_used()
+            ALLOC.peak_blocks_used(),
+            held.len()
         );
     }
 

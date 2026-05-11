@@ -72,7 +72,7 @@ impl<const N: usize> Block<N> {
 
     #[doc(hidden)]
     #[must_use]
-    pub fn as_mut_ptr(&self) -> *mut u8 {
+    pub const fn as_mut_ptr(&self) -> *mut u8 {
         self.0.get().cast::<u8>()
     }
 }
@@ -101,7 +101,7 @@ unsafe impl<const N: usize> Sync for Block<N> {}
 /// * `BLOCK_SIZE` — maximum bytes per allocation. Should be a
 ///   multiple of 64 to avoid intra-block padding.
 /// * `BITMAP_WORDS` — must be `(MAX_BLOCKS + 63) / 64`. Use the
-///   [`declare_global_allocator!`] / [`declare_bounded_allocator!`]
+///   [`declare_global_allocator!`] / [`bounded_allocator!`]
 ///   macros to compute it automatically.
 pub struct BoundedAllocator<
     const MAX_BLOCKS: usize,
@@ -110,7 +110,7 @@ pub struct BoundedAllocator<
 > {
     /// The arena. Each block is `align(64)` and `BLOCK_SIZE` bytes
     /// (rounded up to 64 if smaller). Total footprint ≈
-    /// `MAX_BLOCKS * BLOCK_SIZE` for BLOCK_SIZE ≥ 64.
+    /// `MAX_BLOCKS * BLOCK_SIZE` for `BLOCK_SIZE` ≥ 64.
     arena: [Block<BLOCK_SIZE>; MAX_BLOCKS],
     /// Per-block free flag. Bit `i` of word `w` represents block
     /// `w * 64 + i`. `1` = free, `0` = in use. Words past
@@ -124,10 +124,10 @@ pub struct BoundedAllocator<
     dealloc_count: AtomicUsize,
     /// High-water mark of simultaneously-live blocks.
     peak_in_use: AtomicUsize,
-    /// Live block count (alloc_count - dealloc_count, atomically).
+    /// Live block count (`alloc_count` - `dealloc_count`, atomically).
     in_use: AtomicUsize,
     /// Lock flag. When `true`, every `alloc` panics — required by
-    /// REQ_0302. One-way; no `unlock` method exists.
+    /// `REQ_0302`. One-way; no `unlock` method exists.
     locked: AtomicBool,
 }
 
@@ -144,7 +144,7 @@ impl<const MAX_BLOCKS: usize, const BLOCK_SIZE: usize, const BITMAP_WORDS: usize
     /// All bitmap words are initialised to all-ones, meaning every
     /// block is free. The few tail bits past `MAX_BLOCKS` in the
     /// last word are also set, but the bit-scan refuses to allocate
-    /// them (block index >= MAX_BLOCKS rejection).
+    /// them (block index >= `MAX_BLOCKS` rejection).
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -200,7 +200,7 @@ impl<const MAX_BLOCKS: usize, const BLOCK_SIZE: usize, const BITMAP_WORDS: usize
         MAX_BLOCKS * BLOCK_SIZE
     }
 
-    /// Try to claim a free block. Returns its index (0..MAX_BLOCKS)
+    /// Try to claim a free block. Returns its index (`0..MAX_BLOCKS`)
     /// or `None` if the arena is fully allocated.
     fn try_claim_block(&self) -> Option<usize> {
         for word_idx in 0..BITMAP_WORDS {
@@ -218,17 +218,12 @@ impl<const MAX_BLOCKS: usize, const BLOCK_SIZE: usize, const BITMAP_WORDS: usize
                 }
                 let mask = 1_u64 << bit_idx;
                 let new_word = word & !mask;
-                match self.bitmap[word_idx].compare_exchange(
-                    word,
-                    new_word,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => return Some(block_idx),
-                    Err(_) => {
-                        // Lost the race; retry within this word.
-                        continue;
-                    }
+                // Lost-race retry stays inside the outer `loop`.
+                if self.bitmap[word_idx]
+                    .compare_exchange(word, new_word, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    return Some(block_idx);
                 }
             }
         }
@@ -270,21 +265,17 @@ impl<const MAX_BLOCKS: usize, const BLOCK_SIZE: usize, const BITMAP_WORDS: usize
 // bit is the unique owner of the corresponding block until it CASs
 // the bit back to `1` in `dealloc`.
 #[allow(unsafe_code)]
-unsafe impl<
-    const MAX_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const BITMAP_WORDS: usize,
-> GlobalAlloc for BoundedAllocator<MAX_BLOCKS, BLOCK_SIZE, BITMAP_WORDS>
+unsafe impl<const MAX_BLOCKS: usize, const BLOCK_SIZE: usize, const BITMAP_WORDS: usize> GlobalAlloc
+    for BoundedAllocator<MAX_BLOCKS, BLOCK_SIZE, BITMAP_WORDS>
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if self.is_locked() {
-            panic!(
-                "sonic-bounded-alloc: allocation attempted after lock() (REQ_0302); \
-                 sized {} bytes, alignment {}",
-                layout.size(),
-                layout.align()
-            );
-        }
+        assert!(
+            !self.is_locked(),
+            "sonic-bounded-alloc: allocation attempted after lock() (REQ_0302); \
+             sized {} bytes, alignment {}",
+            layout.size(),
+            layout.align()
+        );
         if layout.size() > BLOCK_SIZE {
             return core::ptr::null_mut();
         }
@@ -348,7 +339,7 @@ macro_rules! declare_global_allocator {
         static $name: $crate::BoundedAllocator<
             { $max_blocks },
             { $block_size },
-            { ($max_blocks + 63) / 64 },
+            { ($max_blocks as usize).div_ceil(64) },
         > = $crate::BoundedAllocator::new();
     };
 }
@@ -367,7 +358,7 @@ macro_rules! bounded_allocator {
         $crate::BoundedAllocator::<
             { $max_blocks },
             { $block_size },
-            { ($max_blocks + 63) / 64 },
+            { ($max_blocks as usize).div_ceil(64) },
         >::new()
     };
 }
@@ -485,12 +476,7 @@ mod counting {
             // SAFETY: forwarding the caller's contract unchanged.
             unsafe { System.alloc_zeroed(layout) }
         }
-        unsafe fn realloc(
-            &self,
-            ptr: *mut u8,
-            layout: Layout,
-            new_size: usize,
-        ) -> *mut u8 {
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
             if self.tracking.load(Ordering::Relaxed) {
                 self.alloc_count.fetch_add(1, Ordering::Relaxed);
             }

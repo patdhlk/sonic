@@ -6,9 +6,10 @@
 //! abort the process must set `panic = "abort"` themselves.
 
 #![allow(unsafe_code)]
+#![allow(clippy::doc_markdown)]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sonic_bounded_alloc::{bounded_allocator, BoundedAllocator};
+use sonic_bounded_alloc::{BoundedAllocator, bounded_allocator};
 
 static UNLOCKED_ALLOC: BoundedAllocator<4, 32, 1> = bounded_allocator!(4, 32);
 

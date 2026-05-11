@@ -15,7 +15,7 @@ pub struct Vertex(pub(crate) usize);
 /// address — the per-vertex dispatch closures capture a `*const Graph`
 /// pointing back into this struct, and would dangle if the `Graph` moved.
 /// All runtime state below is pre-allocated at `finish()` time and reset
-/// in place each `run_once_borrowed` call. Required for REQ_0060.
+/// in place each `run_once_borrowed` call. Required for `REQ_0060`.
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) struct Graph {
     pub(crate) items: Vec<Box<dyn ExecutableItem>>,
@@ -45,8 +45,8 @@ pub(crate) struct Graph {
     /// Completion condvar; signalled when `pending` reaches zero.
     done_cv: (Mutex<()>, Condvar),
     /// Re-dispatch ring — completed pool workers push ready successors;
-    /// the WaitSet thread drains and re-dispatches. Sized to
-    /// `next_power_of_two(n_vertices)` at `finish`. Required for REQ_0060.
+    /// the `WaitSet` thread drains and re-dispatches. Sized to
+    /// `next_power_of_two(n_vertices)` at `finish`. Required for `REQ_0060`.
     ready_ring: crate::ready_ring::ReadyRing,
     /// Per-vertex pre-built dispatch closures. Empty after `finish`,
     /// populated by `prepare_dispatch` when the graph is registered with
@@ -111,6 +111,7 @@ impl GraphBuilder {
     }
 
     /// Build, validating connectedness, acyclicity, and exactly-one root.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn finish(mut self) -> Result<Graph, ExecutorError> {
         let n = self.items.len();
         if n == 0 {
@@ -209,8 +210,7 @@ impl GraphBuilder {
             .iter_mut()
             .map(|b| VertexPtr(std::ptr::from_mut(b.as_mut())))
             .collect();
-        let counters: Vec<AtomicUsize> =
-            in_degree.iter().map(|d| AtomicUsize::new(*d)).collect();
+        let counters: Vec<AtomicUsize> = in_degree.iter().map(|d| AtomicUsize::new(*d)).collect();
 
         Ok(Graph {
             items,
@@ -276,7 +276,7 @@ impl SendGraphPtr {
     /// Return the underlying pointer. Method form so Rust 2021 per-field
     /// capture analysis grabs the whole `SendGraphPtr` (which is `Send +
     /// Sync`) rather than `self.0` (a `*const`, which is not).
-    fn get(&self) -> *const Graph {
+    const fn get(&self) -> *const Graph {
         self.0
     }
 }
@@ -335,8 +335,8 @@ impl Graph {
     ///
     /// All captures are `Arc::clone`s (refcount-only at build time)
     /// and `Copy` primitives; no per-iteration allocation occurs in
-    /// the resulting closures. Required for REQ_0060.
-    #[allow(clippy::too_many_lines)]
+    /// the resulting closures. Required for `REQ_0060`.
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(crate) fn prepare_dispatch(
         self: &mut Box<Self>,
         task_id: TaskId,
@@ -354,7 +354,7 @@ impl Graph {
         // immutable atomics / Mutex slots on `Graph` (no aliasing
         // mutation through this pointer).
         #[allow(unsafe_code)]
-        let graph_ptr = SendGraphPtr(std::ptr::from_ref::<Graph>(self.as_ref()));
+        let graph_ptr = SendGraphPtr(std::ptr::from_ref::<Self>(self.as_ref()));
 
         let mut jobs: Vec<Box<dyn FnMut() + Send + 'static>> = Vec::with_capacity(n);
         for i in 0..n {
@@ -363,13 +363,12 @@ impl Graph {
             let observer = Arc::clone(&observer);
             let monitor = Arc::clone(&monitor);
             let err_slot = Arc::clone(&err_slot);
-            let graph_ptr = graph_ptr;
             let job: Box<dyn FnMut() + Send + 'static> = Box::new(move || {
                 // SAFETY: see SendGraphPtr doc — pointer is stable, no
                 // aliasing mutation; pool.barrier() serialises the
                 // closure with the executor thread's own graph access.
                 #[allow(unsafe_code)]
-                let g: &Graph = unsafe { &*graph_ptr.get() };
+                let g: &Self = unsafe { &*graph_ptr.get() };
 
                 if g.stop_flag.load(Ordering::Acquire) {
                     g.finalise_skipped(i);
@@ -435,7 +434,7 @@ impl Graph {
                     }
                 }
                 let _ = &err_slot; // currently unused on the vertex path
-                                   // (errors are bubbled via first_err / GraphRunOutcome)
+                // (errors are bubbled via first_err / GraphRunOutcome)
             });
             jobs.push(job);
         }
@@ -445,7 +444,7 @@ impl Graph {
     /// Dispatch this graph once and block until completion. Allocation-free
     /// in the steady state — runtime state was pre-allocated by
     /// `Graph::finish` and per-vertex closures by `prepare_dispatch`.
-    /// Required by REQ_0060.
+    /// Required by `REQ_0060`.
     #[allow(unsafe_code)]
     pub(crate) fn run_once_borrowed(&mut self, pool: &Pool) -> GraphRunOutcome {
         let n = self.items.len();
@@ -511,7 +510,7 @@ impl Graph {
     #[allow(unsafe_code)]
     fn dispatch_vertex(&mut self, pool: &Pool, i: usize) {
         let job_ptr: *mut (dyn FnMut() + Send) =
-            self.vertex_jobs[i].as_mut() as *mut (dyn FnMut() + Send);
+            std::ptr::from_mut::<dyn FnMut() + Send>(self.vertex_jobs[i].as_mut());
         // SAFETY: closure lives on this Graph, which lives inside
         // `Box<Graph>` inside `TaskEntry`. `pool.barrier()` (called by
         // the WaitSet thread at the end of every callback) ensures the

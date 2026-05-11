@@ -1,13 +1,14 @@
 //! TEST_0184 — concurrent alloc/dealloc safety (REQ_0304).
 
 #![allow(unsafe_code)]
+#![allow(clippy::doc_markdown, clippy::significant_drop_tightening)]
 
 use core::alloc::{GlobalAlloc, Layout};
+use sonic_bounded_alloc::{BoundedAllocator, bounded_allocator};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use sonic_bounded_alloc::{bounded_allocator, BoundedAllocator};
 
 static ALLOC: BoundedAllocator<256, 64, 4> = bounded_allocator!(256, 64);
 

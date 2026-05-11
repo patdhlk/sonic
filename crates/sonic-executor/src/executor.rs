@@ -42,9 +42,9 @@ pub(crate) struct TaskEntry {
     /// time and re-invoked on every dispatch iteration via
     /// `Pool::submit_borrowed`, avoiding the per-iteration `Box::new(closure)`
     /// that `Pool::submit<F>` requires in threaded mode. Required for
-    /// REQ_0060 (zero-alloc steady-state dispatch). `None` for
+    /// `REQ_0060` (zero-alloc steady-state dispatch). `None` for
     /// `TaskKind::Graph`, which dispatches its vertices via a separate
-    /// path and is handled by REQ_0062/REQ_0063 follow-on work.
+    /// path and is handled by `REQ_0062` / `REQ_0063` follow-on work.
     pub(crate) job: Option<Box<dyn FnMut() + Send + 'static>>,
 }
 
@@ -68,7 +68,7 @@ pub struct Executor {
     /// reset to `None` at the top of each `dispatch_loop` iteration. Pool
     /// workers obtain a refcount-only `Arc::clone` of this slot, avoiding
     /// the per-iteration heap allocation that the previous design incurred.
-    /// Required for REQ_0060.
+    /// Required for `REQ_0060`.
     pub(crate) iter_err: Arc<std::sync::Mutex<Option<ExecutorError>>>,
 }
 
@@ -140,7 +140,8 @@ impl Executor {
         // `TaskEntry`. See SendItemPtr safety doc for the rest of the
         // discipline (barrier() pairs with worker access).
         #[allow(unsafe_code)]
-        let item_ptr = SendItemPtr::new(item_box.as_mut() as *mut dyn ExecutableItem);
+        let item_ptr =
+            SendItemPtr::new(std::ptr::from_mut::<dyn ExecutableItem>(item_box.as_mut()));
 
         let job = build_single_job(
             id.clone(),
@@ -245,7 +246,9 @@ impl Executor {
         // is unaffected by header moves. We never resize the chain Vec
         // after this point. See SendChainPtr safety doc for the rest.
         #[allow(unsafe_code)]
-        let chain_ptr = SendChainPtr::new(&mut items as *mut Vec<Box<dyn ExecutableItem>>);
+        let chain_ptr = SendChainPtr::new(std::ptr::from_mut::<Vec<Box<dyn ExecutableItem>>>(
+            &mut items,
+        ));
         // NB: the pointer above is to the local `items` Vec on the
         // stack — it's invalid after the `push` below moves items into
         // the TaskEntry. We rederive a stable pointer after the push.
@@ -271,7 +274,7 @@ impl Executor {
         let task_idx = self.tasks.len() - 1;
         let chain_vec_ptr: *mut Vec<Box<dyn ExecutableItem>> = match &mut self.tasks[task_idx].kind
         {
-            TaskKind::Chain(v) => v as *mut _,
+            TaskKind::Chain(v) => std::ptr::from_mut::<Vec<Box<dyn ExecutableItem>>>(v),
             // The push above used TaskKind::Chain, so this arm is
             // unreachable. Mark it explicitly to satisfy `match`.
             _ => unreachable!("just-pushed task is TaskKind::Chain"),
@@ -814,7 +817,7 @@ impl SendItemPtr {
     }
 
     /// Returns the raw pointer. Takes `&self` so the wrapper can be invoked
-    /// repeatedly from an `FnMut` dispatch closure (REQ_0060 requires the
+    /// repeatedly from an `FnMut` dispatch closure (`REQ_0060` requires the
     /// dispatch closure to be reusable across iterations without allocation).
     fn get(&self) -> *mut dyn ExecutableItem {
         self.ptr
@@ -836,8 +839,8 @@ unsafe impl Sync for SendItemPtr {}
 /// holds `&mut self` for the duration of `dispatch_loop`, and the
 /// `pool.barrier()` at the end of each callback ensures the closure
 /// has finished using this pointer before the Vec could be touched
-/// from the WaitSet thread again. The Vec is never resized after
-/// dispatch begins. Required for REQ_0060 — chain dispatch must not
+/// from the `WaitSet` thread again. The Vec is never resized after
+/// dispatch begins. Required for `REQ_0060` — chain dispatch must not
 /// allocate per iteration.
 #[allow(unsafe_code)]
 struct SendChainPtr {
@@ -867,7 +870,7 @@ unsafe impl Sync for SendChainPtr {}
 /// per dispatch via `Pool::submit_borrowed`, which (unlike `submit`)
 /// performs no allocation. The closure captures Arc clones of the
 /// executor's shared state — those clones are refcount-only at build
-/// time and are reused on every dispatch. Required for REQ_0060.
+/// time and are reused on every dispatch. Required for `REQ_0060`.
 #[allow(clippy::too_many_arguments)]
 fn build_single_job(
     id: TaskId,
@@ -926,7 +929,7 @@ fn build_chain_job(
             if let Some(aid) = app_id {
                 obs.on_app_start(id.clone(), aid, app_inst);
             }
-            let raw = item_box.as_mut() as *mut dyn ExecutableItem;
+            let raw = std::ptr::from_mut::<dyn ExecutableItem>(item_box.as_mut());
             let started = std::time::Instant::now();
             mon.pre_execute(id.clone(), started);
             #[allow(unsafe_code)]

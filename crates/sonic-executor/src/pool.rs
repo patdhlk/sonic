@@ -23,7 +23,7 @@ use std::thread::{self, JoinHandle};
 ///   owned by the caller. The caller guarantees the closure outlives
 ///   the job — discipline enforced by `pool.barrier()` before the
 ///   closure could be touched again. The Borrowed path performs **no
-///   per-submit heap allocation**, which is required by REQ_0060
+///   per-submit heap allocation**, which is required by `REQ_0060`
 ///   (zero-alloc steady-state dispatch).
 enum Job {
     Owned(Box<dyn FnOnce() + Send + 'static>),
@@ -36,7 +36,7 @@ enum Job {
 ///
 /// `Send` is asserted by the pool's discipline: the caller (the
 /// executor) holds exclusive access to the closure between dispatches
-/// because `pool.barrier()` is called at the end of each WaitSet
+/// because `pool.barrier()` is called at the end of each `WaitSet`
 /// callback iteration, sequencing the closure's invocation strictly
 /// inside one iteration of `dispatch_loop`. The pointer is therefore
 /// not aliased on the worker side at the moment a new iteration's
@@ -215,7 +215,8 @@ impl Pool {
                 // Safe to expect: the channel sender lives in self, and self can't be
                 // dropped while we hold &self. The only path to a closed channel is
                 // Pool::drop, which can't run concurrently with submit().
-                tx.send(Job::Owned(Box::new(f))).expect("pool channel closed");
+                tx.send(Job::Owned(Box::new(f)))
+                    .expect("pool channel closed");
             }
         }
     }
@@ -223,7 +224,7 @@ impl Pool {
     /// Submit a job whose closure is owned by the caller and remains valid
     /// across submissions. Performs **no heap allocation** per call (the
     /// closure was allocated once when the caller built it). Required by
-    /// REQ_0060.
+    /// `REQ_0060`.
     ///
     /// # Safety
     ///

@@ -1,9 +1,10 @@
 //! TEST_0183 — allocation accounting API (REQ_0303).
 
 #![allow(unsafe_code)]
+#![allow(clippy::doc_markdown)]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sonic_bounded_alloc::{bounded_allocator, BoundedAllocator};
+use sonic_bounded_alloc::{BoundedAllocator, bounded_allocator};
 
 static ALLOC: BoundedAllocator<8, 64, 1> = bounded_allocator!(8, 64);
 

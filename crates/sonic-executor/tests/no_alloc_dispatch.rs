@@ -9,6 +9,7 @@
 //! attachment, iceoryx2 lazy init).
 
 #![allow(missing_docs)]
+#![allow(clippy::doc_markdown, clippy::cast_possible_wrap)]
 
 use core::time::Duration;
 use sonic_bounded_alloc::CountingAllocator;
@@ -58,8 +59,8 @@ const ITERS_SMALL: usize = 10;
 fn per_iter_allocs(exec: &mut Executor) -> i64 {
     // Warm up to absorb any one-shot init that happens on first dispatch.
     exec.run_n(ITERS_SMALL).unwrap();
-    let (a_small, _) = count_allocs(|| exec.run_n(ITERS_SMALL).unwrap());
-    let (a_big, _) = count_allocs(|| exec.run_n(ITERS_BIG).unwrap());
+    let (a_small, ()) = count_allocs(|| exec.run_n(ITERS_SMALL).unwrap());
+    let (a_big, ()) = count_allocs(|| exec.run_n(ITERS_BIG).unwrap());
     let diff = a_big as i64 - a_small as i64;
     let iters = (ITERS_BIG - ITERS_SMALL) as i64;
     // Round up so any fractional alloc per iter is detected.
@@ -154,7 +155,7 @@ fn harness_catches_deliberate_allocation() {
 
     exec.run_n(1).unwrap();
 
-    let (allocs, _) = count_allocs(|| exec.run_n(10).unwrap());
+    let (allocs, ()) = count_allocs(|| exec.run_n(10).unwrap());
     assert!(
         allocs >= 10,
         "harness regression: counting allocator did not catch deliberate vec! allocations (saw {allocs})"

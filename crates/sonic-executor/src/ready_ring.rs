@@ -1,8 +1,8 @@
 //! Hand-rolled bounded MPSC ring used by `Graph::run_once_borrowed` to
 //! communicate "vertex `j` became ready" from completed pool workers
-//! (producers) back to the WaitSet thread (consumer).
+//! (producers) back to the `WaitSet` thread (consumer).
 //!
-//! Required by REQ_0060 — the previous `crossbeam_channel::unbounded`
+//! Required by `REQ_0060` — the previous `crossbeam_channel::unbounded`
 //! design allocated internal Arc'd shared state on every
 //! `Graph::run_once` call. The ring here is allocated **once** by
 //! `ReadyRing::new` at graph-finish time and reused across every
@@ -16,6 +16,9 @@
 //! latency on modern memory systems.
 
 #![allow(dead_code)]
+// redundant_pub_crate fires because the module itself is private; the
+// pub(crate) visibility is intentional for use by the graph scheduler.
+#![allow(clippy::redundant_pub_crate)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -72,18 +75,20 @@ impl ReadyRing {
             if tail.wrapping_sub(head) >= self.buf.len() {
                 return Err(());
             }
-            match self.tail.compare_exchange(
-                tail,
-                tail.wrapping_add(1),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    self.buf[tail & self.mask].store(v, Ordering::Release);
-                    return Ok(());
-                }
-                Err(_) => continue,
+            if self
+                .tail
+                .compare_exchange(
+                    tail,
+                    tail.wrapping_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                self.buf[tail & self.mask].store(v, Ordering::Release);
+                return Ok(());
             }
+            // Lost the race; the outer `loop` will retry.
         }
     }
 
