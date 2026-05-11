@@ -290,6 +290,194 @@ services per test as before; one tokio runtime per test.
 
 ----
 
+EtherCAT integration tests
+--------------------------
+
+EtherCAT tests come in two flavours: software tests (unit + raw-frame
+mock) parallel-safe on any host, and hardware-in-the-loop tests marked
+``[bench]`` that require an EK1100 + EL-series fixture on the CI test
+bench. The mock implementation lives in
+``sonic-connector-ethercat/tests/mock/`` and replays canned EtherCAT
+frame responses so bring-up, PDO mapping, and WKC scenarios can be
+exercised without hardware. Bench tests run only when invoked as
+``cargo test --features ethercat-bench``.
+
+.. test:: EthercatConnector trait surface
+   :id: TEST_0200
+   :status: open
+   :verifies: REQ_0310
+
+   Compile-time test confirming that
+   ``EthercatConnector<JsonCodec>`` implements ``Connector`` with
+   ``type Routing = EthercatRouting``. A ``trybuild`` compile-fail
+   companion test asserts that swapping ``Routing`` to a foreign
+   marker fails to compile.
+
+.. test:: EthercatRouting field round-trip
+   :id: TEST_0201
+   :status: open
+   :verifies: REQ_0311
+
+   Unit test constructing ``EthercatRouting`` values with the four
+   fields (SubDevice configured address, PDO direction, bit offset,
+   bit length); asserts the values round-trip through serialization
+   and that ``EthercatRouting: Routing + Clone + Send + Sync + Debug
+   + 'static`` holds at compile time.
+
+.. test:: Single MainDevice per gateway instance
+   :id: TEST_0202
+   :status: open
+   :verifies: REQ_0312
+
+   Construct an ``EthercatGateway`` builder and confirm that the
+   builder accepts exactly one network interface name and produces
+   exactly one ``MainDevice``. A second call to ``.with_interface``
+   replaces the previous value rather than producing a second device.
+
+.. test:: Bus reaches OP before traffic accepted
+   :id: TEST_0203
+   :status: open
+   :verifies: REQ_0313
+
+   Mock-frame test: start an ``EthercatGateway`` against the
+   raw-frame mock; before the mock acknowledges the SAFE-OP → OP
+   transition, ``ChannelWriter::send`` from the plugin side returns
+   ``ConnectorError::NotReady``. After the mock signals OP, the same
+   send completes successfully.
+
+.. test:: Static PDO map accepted from options
+   :id: TEST_0204
+   :status: open
+   :verifies: REQ_0314
+
+   Unit test that ``EthercatConnectorOptions::with_pdo_mapping``
+   accepts a static description per SubDevice (RxPDO / TxPDO
+   entries) and that the in-memory representation preserves entry
+   order and bit-offset values. Mismatched declarations (bit length
+   exceeds SubDevice capacity) are rejected at builder time.
+
+.. test:: PDO mapping applied during PRE-OP to SAFE-OP
+   :id: TEST_0205
+   :status: open
+   :verifies: REQ_0315
+
+   Mock-frame test observing the SDO write sequence during bring-up:
+   the gateway emits writes to ``0x1C12`` (RxPDO) and ``0x1C13``
+   (TxPDO) before the SAFE-OP transition is requested. The exact
+   sub-index sequence matches the configured PDO mapping.
+
+.. test:: Cycle time configurable
+   :id: TEST_0206
+   :status: open
+   :verifies: REQ_0316
+
+   Unit test that ``EthercatConnectorOptions::cycle_time`` accepts
+   ``Duration`` values from 1 ms upward; the default is 2 ms; values
+   below 1 ms are rejected at builder time. The configured value is
+   observable on the gateway's metadata accessor.
+
+.. test:: Missed ticks are skipped not queued
+   :id: TEST_0207
+   :status: open
+   :verifies: REQ_0317
+
+   Mock-frame test: stall the gateway's tokio sidecar for 5 cycles
+   by holding a mutex on the bridge. After release, exactly one
+   tx_rx cycle runs (not five) — the skipped ticks are dropped, not
+   queued for catch-up. The asserted behaviour matches
+   ``tokio::time::MissedTickBehavior::Skip``.
+
+.. test:: Distributed Clocks bring-up is opt-in
+   :id: TEST_0208
+   :status: open
+   :verifies: REQ_0318
+
+   Two mock-frame scenarios. (1) Default options: the gateway
+   completes bring-up without emitting any BWR to ``0x0900``, FRMW
+   to ``0x0910``, or write to ``0x0920``. (2)
+   ``distributed_clocks: true``: the DC register sequence appears
+   between PRE-OP and SAFE-OP exactly once per bring-up.
+
+.. test:: Up requires OP and matching working counter
+   :id: TEST_0209
+   :status: open
+   :verifies: REQ_0319
+
+   Mock-frame test: drive the gateway to OP with the mock reporting
+   the expected WKC on every cycle for 10 consecutive cycles;
+   ``Connector::health()`` returns ``ConnectorHealth::Up``. Inject a
+   single low WKC cycle and immediately query health; ``Up`` is no
+   longer reported.
+
+.. test:: Working-counter mismatch transitions to Degraded
+   :id: TEST_0210
+   :status: open
+   :verifies: REQ_0320
+
+   Mock-frame test: configure a degradation threshold of N=3 cycles;
+   inject N consecutive cycles with WKC below the expected value;
+   the gateway transitions to ``ConnectorHealth::Degraded`` and
+   emits exactly one ``HealthEvent::Degraded`` with a reason naming
+   the offending cycle count.
+
+.. test:: Tokio sidecar contained inside connector crate
+   :id: TEST_0211
+   :status: open
+   :verifies: REQ_0321
+
+   Structural test using ``cargo tree``: assert that
+   ``sonic-executor`` does not appear with ``tokio`` in its
+   transitive dependency closure, and that ``tokio`` appears only
+   under ``sonic-connector-ethercat`` (and other connector crates).
+   A second assertion: the published ``EthercatConnector`` plugin
+   surface contains no ``tokio::`` types.
+
+.. test:: Bridge channels are bounded with configurable capacity
+   :id: TEST_0212
+   :status: open
+   :verifies: REQ_0322
+
+   Unit test that ``EthercatConnectorOptions::outbound_capacity``
+   and ``inbound_capacity`` produce bridges with exactly the
+   configured number of slots. After filling the channel, further
+   non-blocking sends return ``Full`` rather than allocating
+   additional capacity.
+
+.. test:: Outbound bridge saturation surfaces as BackPressure
+   :id: TEST_0213
+   :status: open
+   :verifies: REQ_0323
+
+   Mock-frame test: configure a tiny outbound-bridge capacity. Stall
+   the tokio sidecar from draining. The plugin's ``ChannelWriter::send``
+   returns ``ConnectorError::BackPressure`` and the gateway reports
+   ``ConnectorHealth::Degraded`` until the bridge drains.
+
+.. test:: Inbound bridge saturation surfaces as DroppedInbound
+   :id: TEST_0214
+   :status: open
+   :verifies: REQ_0324
+
+   Mock-frame test: configure a tiny inbound-bridge capacity. Block
+   the inbound gateway item from draining. Drive a flood of inbound
+   process-image updates through the mock; the gateway emits one or
+   more ``HealthEvent::DroppedInbound { count }`` and the inbound
+   image for affected cycles is dropped (not buffered).
+
+.. test:: Gateway opens raw socket on Linux with CAP_NET_RAW
+   :id: TEST_0215
+   :status: open
+   :verifies: REQ_0325
+
+   Hardware-bench test ``[bench]``: on a Linux CI host with
+   ``CAP_NET_RAW`` granted to the test binary, the gateway opens the
+   configured NIC via ``ethercrab::std::tx_rx_task`` and reports
+   ``Up``. Companion negative test (also Linux): when
+   ``CAP_NET_RAW`` is absent, gateway startup fails with a
+   permission error before any EtherCAT frame is sent.
+
+----
+
 Workspace end-to-end tests
 --------------------------
 
@@ -368,6 +556,6 @@ Cross-cutting traceability
 
 .. needtable::
    :types: test
-   :filter: "TEST_01" in id
+   :filter: "TEST_01" in id or "TEST_02" in id
    :columns: id, title, status, verifies
    :show_filters:

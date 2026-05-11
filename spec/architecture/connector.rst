@@ -353,6 +353,121 @@ that ``:refines:`` the requirement or feature it answers.
    ❌ MQTT 5 user-properties / shared-subscriptions adoption is
    blocked on a follow-on spec.
 
+.. arch-decision:: ethercrab as the EtherCAT MainDevice library
+   :id: ADR_0020
+   :status: open
+   :refines: FEAT_0041
+
+   **Context.** EtherCAT MainDevice options in Rust are ``ethercrab``
+   (pure Rust, ``std`` + ``no_std``, actively maintained), ``soem-rs``
+   (FFI wrapper around the C SOEM stack), or hand-rolled. SOEM is the
+   industry-standard C implementation, but pulling C dependencies and
+   their build complexity into the workspace conflicts with the
+   no-C-deps posture the rest of sonic adopts.
+
+   **Decision.** Use ``ethercrab`` from the workspace. It is pure
+   Rust, supports both ``std`` (tokio TX/RX task on Linux raw socket)
+   and ``no_std`` (deferred), and exposes a typestate bring-up API
+   (``init_single_group`` → ``into_op``) that maps cleanly onto the
+   four EtherCAT bus states.
+
+   **Consequences.** ✅ No C build dependencies; one ``cargo build``
+   gets everything. ✅ ``no_std`` deployment becomes possible without
+   a second EtherCAT stack. ❌ ethercrab is pre-1.0, so API churn is
+   a tracked risk. ❌ SOEM conformance test coverage is broader;
+   ethercrab is validated against EK1100 / EL-series modules but
+   uncommon vendor extensions may surface gaps.
+
+.. arch-decision:: Single MainDevice per gateway
+   :id: ADR_0021
+   :status: open
+   :refines: REQ_0312
+
+   **Context.** An EtherCAT network is physically one segment per
+   network interface; the MainDevice owns that segment's TX/RX cycle.
+   Multi-NIC support would require multiple MainDevices arbitrating
+   shared cycle timing and working-counter state.
+
+   **Decision.** Each ``EthercatGateway`` instance owns exactly one
+   ``ethercrab::MainDevice`` bound to one network interface. Multi-NIC
+   deployments instantiate multiple gateways with disjoint SHM service
+   names.
+
+   **Consequences.** ✅ Cycle timing, working-counter ownership, and
+   Distributed Clocks bring-up have a single source of truth.
+   ✅ Mirrors :need:`REQ_0295` (one broker per MQTT gateway).
+   ❌ Operators wanting one process to own two EtherCAT segments must
+   instantiate two gateways (acceptable — rare configuration).
+
+.. arch-decision:: Static PDO mapping declared at build time
+   :id: ADR_0022
+   :status: open
+   :refines: REQ_0314, REQ_0315
+
+   **Context.** EtherCAT SubDevice PDO mappings can be sourced two
+   ways: (1) parsing an ESI / EEPROM XML descriptor per SubDevice at
+   startup, or (2) declaring the mapping in application code at build
+   time. ESI parsing is what TwinCAT and similar engineering tools
+   do; it handles arbitrary vendor modules. Static declaration trades
+   generality for compile-time type safety on the routing struct.
+
+   **Decision.** The application declares each SubDevice's PDO
+   mapping as a static description in ``EthercatConnectorOptions``;
+   the gateway applies it during the PRE-OP → SAFE-OP transition via
+   SDO writes to the sync-manager assignment indices ``0x1C12``
+   (RxPDO) and ``0x1C13`` (TxPDO). ESI parsing is out of scope.
+
+   **Consequences.** ✅ ``EthercatRouting`` (:need:`REQ_0311`) becomes
+   a compile-time-checked struct — bit offset, bit length, and PDO
+   direction match the static map. ✅ No runtime XML parsing.
+   ❌ Adding a new SubDevice model requires a code change, not a
+   config-file swap. ❌ Out-of-tree SubDevices with unusual PDO
+   assignments need manual mapping (acceptable — matches the rest of
+   sonic's compile-time-config posture).
+
+.. arch-decision:: Distributed Clocks bring-up is opt-in
+   :id: ADR_0023
+   :status: open
+   :refines: REQ_0318
+
+   **Context.** DC sub-microsecond synchronisation matters for motion
+   control and time-stamped sampling; many EtherCAT deployments
+   (digital I/O, ramped analog, slow process control) don't need it.
+   DC bring-up adds a multi-pass register dance (BWR ``0x0900``,
+   per-slave offset write to ``0x0920``, FRMW from ``0x0910``) and
+   requires every SubDevice on the segment to declare 64-bit DC
+   support.
+
+   **Decision.** The gateway performs DC bring-up only when
+   ``EthercatConnectorOptions::distributed_clocks`` is explicitly
+   enabled by the application. Default is off.
+
+   **Consequences.** ✅ Buses without DC-capable SubDevices work out
+   of the box. ✅ Bring-up latency is lower when DC is unused.
+   ❌ Motion-control applications must remember to enable DC.
+   ❌ Two bring-up paths to test (with and without DC).
+
+.. arch-decision:: Linux raw socket only in first cut
+   :id: ADR_0024
+   :status: open
+   :refines: REQ_0325
+
+   **Context.** ethercrab supports Linux raw sockets, NPCAP / WinPcap
+   on Windows, and ``no_std`` direct-MAC drivers. Each adds porting
+   work. EtherCAT in industrial deployments is overwhelmingly Linux;
+   the production target is Linux.
+
+   **Decision.** The first cut uses ethercrab's ``std::tx_rx_task``
+   helper, which opens an ``AF_PACKET`` raw socket. Linux is the only
+   supported host OS; the gateway process requires ``CAP_NET_RAW``.
+   Windows and ``no_std`` MCU deployments are deferred.
+
+   **Consequences.** ✅ One bring-up path to test in the first cut.
+   ✅ Deployment recipe is "install the binary, grant CAP_NET_RAW".
+   ❌ Windows-based engineering desks cannot run the gateway natively
+   (they can run plugins; the gateway must live on Linux).
+   ❌ Embedded MCU EtherCAT mainboards await a follow-on spec.
+
 ----
 
 5. Building block view
@@ -417,11 +532,14 @@ two crates that carry the most logic.
 .. architecture:: Level-1 building block decomposition
    :id: ARCH_0002
    :status: open
-   :refines: BB_0001, BB_0002, BB_0003, BB_0004, BB_0005
+   :refines: BB_0001, BB_0002, BB_0003, BB_0004, BB_0005, BB_0030
 
    Crate-level building blocks and their dependency graph. All edges
    point from depender to dependee. The graph is acyclic; the host is
-   the only consumer of every other new crate.
+   the only consumer of every other new crate. The
+   ``sonic-connector-ethercat`` crate (BB_0030) is a peer of
+   ``sonic-connector-mqtt`` (BB_0004) — both depend on the same
+   core / transport / codec triad and feed the host.
 
    .. mermaid::
 
@@ -435,19 +553,25 @@ two crates that carry the most logic.
           TX[sonic-connector-transport-iox<br/>BB_0002]
           CD[sonic-connector-codec<br/>BB_0003]
           MQ[sonic-connector-mqtt<br/>BB_0004]
+          EC[sonic-connector-ethercat<br/>BB_0030]
           HO[sonic-connector-host<br/>BB_0005]
         end
         CO --> TX
         CO --> CD
         CO --> MQ
+        CO --> EC
         TX --> MQ
+        TX --> EC
         CD --> MQ
+        CD --> EC
         EX --> TX
         EX --> MQ
+        EX --> EC
         CO --> HO
         TX --> HO
         CD --> HO
         MQ --> HO
+        EC --> HO
         TR -.optional adapter.-> HO
 
 .. building-block:: ConnectorEnvelope (sub-block of BB_0002)
@@ -522,6 +646,65 @@ two crates that carry the most logic.
    thread (WaitSet driver) and the tokio runtime owning rumqttc.
    Outbound = ``tokio::sync::mpsc``; inbound = ``crossbeam_channel``
    wired as a sonic-executor signal source.
+
+.. building-block:: sonic-connector-ethercat
+   :id: BB_0030
+   :status: open
+   :implements: REQ_0310, REQ_0311, REQ_0312, REQ_0321
+
+   EtherCAT plugin (``EthercatConnector<C>`` implementing
+   ``Connector``) and gateway (``EthercatGateway`` exposing executable
+   items). Hosts the tokio sidecar driving ethercrab's ``tx_rx_task``
+   and the bridge between sonic-executor and tokio. Depends on
+   ``sonic-connector-core``, ``sonic-connector-transport-iox``,
+   ``ethercrab``, ``sonic-executor``.
+
+.. building-block:: EthercatConnector (sub-block of BB_0030, plugin side)
+   :id: BB_0031
+   :status: open
+   :implements: REQ_0310, REQ_0311
+
+   Plugin-side ``EthercatConnector<C: PayloadCodec>``. Owns no I/O —
+   produces ``ChannelWriter`` / ``ChannelReader`` handles whose
+   ``EthercatRouting`` (SubDevice configured address, PDO direction,
+   bit offset within the SubDevice's process data, bit length of the
+   mapped object) identifies one process-data slice. Acts as a
+   compile-time-checked façade over the gateway's SHM services.
+
+.. building-block:: EthercatGateway (sub-block of BB_0030, gateway side)
+   :id: BB_0032
+   :status: open
+   :implements: REQ_0312, REQ_0313, REQ_0325
+
+   Gateway-side executable item that owns the ethercrab ``MainDevice``
+   and ``PduStorage`` on one Linux network interface. Brings the bus
+   from INIT through PRE-OP and SAFE-OP to OP via the typestate
+   ``init_single_group`` / ``into_op`` API before serving plugin
+   traffic. Opens the NIC via ``ethercrab::std::tx_rx_task``;
+   requires ``CAP_NET_RAW``.
+
+.. building-block:: PDO mapping (sub-block of BB_0030)
+   :id: BB_0033
+   :status: open
+   :implements: REQ_0314, REQ_0315
+
+   Module that accepts a static PDO-mapping description per SubDevice
+   from ``EthercatConnectorOptions`` and applies it via SDO writes to
+   the sync-manager assignment indices ``0x1C12`` (RxPDO) and
+   ``0x1C13`` (TxPDO) during the PRE-OP → SAFE-OP transition. No ESI
+   or EEPROM parsing.
+
+.. building-block:: Tokio bridge for ethercrab (sub-block of BB_0030)
+   :id: BB_0034
+   :status: open
+   :implements: REQ_0322, REQ_0323, REQ_0324
+
+   Two bounded channel pairs that translate between sonic-executor's
+   WaitSet thread and the tokio runtime owning ethercrab's
+   ``tx_rx_task``. Outbound saturation surfaces as
+   ``ConnectorError::BackPressure`` plus ``ConnectorHealth::Degraded``;
+   inbound saturation emits ``HealthEvent::DroppedInbound { count }``
+   and drops the inbound process image for the affected cycle.
 
 ----
 
@@ -657,6 +840,98 @@ behaviour and the building blocks that implement it.
         B-->>TT: DISCONNECT ack (or timeout)
         TT->>TT: tokio runtime drained
         HO-->>SIG: process exits
+
+.. architecture:: EtherCAT bus bring-up sequence
+   :id: ARCH_0040
+   :status: open
+   :refines: REQ_0313, REQ_0314, REQ_0315, BB_0032, BB_0033
+
+   Bring-up walks the four EtherCAT bus states. PDO mapping is applied
+   during the PRE-OP → SAFE-OP transition — the only window where SDO
+   writes to the sync-manager assignment indices land on a stable
+   mailbox but the cyclic process image is not yet live. Plugin
+   traffic is accepted only after the bus reaches OP.
+
+   .. mermaid::
+
+      sequenceDiagram
+        autonumber
+        participant HO as ConnectorHost
+        participant GW as EthercatGateway
+        participant EC as ethercrab MainDevice
+        participant SD as SubDevices
+        participant PL as Plugin (EthercatConnector)
+
+        HO->>GW: start gateway
+        GW->>EC: PduStorage.try_split + MainDevice::new
+        GW->>EC: spawn tx_rx_task on tokio sidecar
+        GW->>EC: init_single_group (INIT to PRE-OP)
+        EC->>SD: discover and address SubDevices
+        GW->>SD: SDO writes 0x1C12 / 0x1C13 (PDO mapping)
+        GW->>EC: group.into_safe_op (PRE-OP to SAFE-OP)
+        GW->>EC: group.into_op (SAFE-OP to OP)
+        GW-->>HO: ConnectorHealth::Up
+        PL->>GW: writer.send / reader.try_recv accepted
+
+.. architecture:: Cyclic process-data exchange and working-counter health
+   :id: ARCH_0041
+   :status: open
+   :refines: REQ_0316, REQ_0317, REQ_0319, REQ_0320, BB_0032, BB_0034
+
+   The gateway runs one ``group.tx_rx`` cycle per tick on
+   ``tokio::time::interval`` with ``MissedTickBehavior::Skip``.
+   Working-counter inspection on each completed cycle drives the
+   externally observable ``ConnectorHealth`` transitions; the resulting
+   state machine matches :need:`ARCH_0012` (uniform health surface)
+   with EtherCAT-specific entry conditions.
+
+   .. mermaid::
+
+      stateDiagram-v2
+        [*] --> Connecting: gateway started
+        Connecting --> Up: bus reaches OP and WKC matches
+        Up --> Degraded: WKC below expected on N consecutive cycles
+        Degraded --> Up: WKC restored
+        Up --> Down: bus drops below OP
+        Degraded --> Down: WKC remains below expected past timeout
+        Down --> Connecting: ReconnectPolicy backoff elapses
+        Connecting --> Down: bring-up attempt fails
+        Up --> [*]: shutdown
+        Down --> [*]: shutdown
+
+.. architecture:: Optional Distributed Clocks bring-up
+   :id: ARCH_0042
+   :status: open
+   :refines: REQ_0318, BB_0032
+
+   When ``EthercatConnectorOptions::distributed_clocks`` is enabled,
+   the gateway inserts a register-level bring-up step between the
+   PRE-OP and SAFE-OP transitions of :need:`ARCH_0040`. Each step
+   uses standard EtherCAT broadcast or configured-write commands; the
+   sequence runs once per fresh bring-up and once per ReconnectPolicy-
+   driven re-bringup. When DC is disabled, the entire sequence is
+   skipped.
+
+   .. mermaid::
+
+      sequenceDiagram
+        autonumber
+        participant GW as EthercatGateway
+        participant EC as ethercrab MainDevice
+        participant SD as SubDevices
+
+        GW->>EC: read SupportFlags (0x0008) per SubDevice
+        EC->>SD: BRD 0x0008
+        SD-->>EC: 64-bit DC support flags
+        GW->>EC: latch port-0 receive times
+        EC->>SD: BWR 0x0900 (system time)
+        loop per DC-capable SubDevice
+            EC->>SD: read 0x0918 (receive time processing unit)
+            SD-->>EC: t_recv
+            EC->>SD: write 0x0920 (system time offset = t_sys - t_recv)
+        end
+        GW->>EC: propagate reference clock
+        EC->>SD: FRMW 0x0910 (first SubDevice clock)
 
 ----
 
