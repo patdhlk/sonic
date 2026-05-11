@@ -42,6 +42,9 @@ pub mod gateway;
 pub mod health;
 pub mod options;
 pub mod routing;
+pub mod scheduler;
+pub mod sdo;
+pub mod wkc;
 
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 pub use connector::EthercatConnector;
@@ -51,3 +54,6 @@ pub use options::{
     EthercatConnectorOptions, EthercatConnectorOptionsBuilder, PdoEntry, SubDeviceMap,
 };
 pub use routing::{EthercatRouting, PdoDirection};
+pub use scheduler::{CycleDecision, CycleScheduler};
+pub use sdo::{SM_ASSIGN_RX_PDO, SM_ASSIGN_TX_PDO, SdoValue, SdoWrite, pdo_sdo_writes};
+pub use wkc::{WkcVerdict, evaluate_wkc};
