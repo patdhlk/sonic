@@ -1,0 +1,34 @@
+[package]
+name         = "sonic-connector-ethercat"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "EtherCAT reference connector for the sonic-connector framework. Implements BB_0030 (FEAT_0041)."
+
+[dependencies]
+sonic-connector-core           = { path = "../sonic-connector-core" }
+sonic-connector-transport-iox  = { path = "../sonic-connector-transport-iox" }
+sonic-connector-host           = { path = "../sonic-connector-host" }
+sonic-executor                 = { path = "../sonic-executor" }
+iceoryx2                       = { workspace = true }
+crossbeam-channel              = { workspace = true }
+tokio                          = { workspace = true }
+serde                          = { workspace = true, features = ["std"] }
+thiserror                      = { workspace = true }
+
+[dev-dependencies]
+sonic-connector-codec = { path = "../sonic-connector-codec" }
+
+[lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
+missing_errors_doc      = "allow"
