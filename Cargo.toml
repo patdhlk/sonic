@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/sonic-bounded-alloc",
     "crates/sonic-executor",
     "crates/sonic-executor-tracing",
     "crates/sonic-replay",

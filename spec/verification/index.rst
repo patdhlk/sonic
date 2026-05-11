@@ -10,6 +10,7 @@ Test cases verifying requirements. Each ``test`` directive
 
    connector
    plc-runtime
+   bounded-alloc
 
 .. needtable::
    :types: test

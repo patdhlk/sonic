@@ -1,0 +1,41 @@
+[package]
+name         = "sonic-bounded-alloc"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "Static pre-allocated bounded global allocator with hard caps and lock-after-init mode."
+
+[features]
+# `std` (default-on) enables the `CountingAllocator` helper, which
+# wraps `std::alloc::System` with cross-thread alloc / dealloc
+# counters. Useful as a `#[global_allocator]` in test binaries that
+# need to assert "zero per-iteration heap activity" without
+# constraining total capacity. The core `BoundedAllocator` type is
+# `#![no_std]`-compatible regardless of this feature.
+default = ["std"]
+std = []
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
+missing_errors_doc      = "allow"
+
+# Note: `panic = "abort"` is the deployment-side configuration
+# required by REQ_0302 — it lives in the *consuming* binary's
+# Cargo.toml (the binary whose `#[global_allocator]` is this
+# `BoundedAllocator`). Profile settings declared here in a
+# non-workspace-root Cargo.toml are silently ignored by cargo, so
+# documenting them in the consumer is the only effective place.
+
+[[example]]
+name = "fail_closed"
+path = "examples/fail_closed.rs"
