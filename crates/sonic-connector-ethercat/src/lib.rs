@@ -40,6 +40,7 @@ pub mod bridge;
 #[cfg(feature = "bus-integration")]
 pub mod bus;
 pub mod connector;
+pub mod dispatcher;
 pub mod driver;
 #[cfg(feature = "bus-integration")]
 pub mod ethercrab_driver;
@@ -57,6 +58,9 @@ pub mod wkc;
 
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 pub use connector::EthercatConnector;
+pub use dispatcher::{
+    DispatchReport, IoxInboundPublish, IoxOutboundDrain, dispatch_one_cycle, dispatcher_loop,
+};
 pub use driver::{BringUp, BusDriver};
 #[cfg(feature = "bus-integration")]
 pub use ethercrab_driver::EthercrabBusDriver;
@@ -66,7 +70,10 @@ pub use mock::MockBusDriver;
 pub use options::{
     EthercatConnectorOptions, EthercatConnectorOptionsBuilder, PdoEntry, SubDeviceMap,
 };
-pub use registry::{ChannelBinding, ChannelHandle, ChannelRegistry, RegisteredChannel};
+pub use registry::{
+    ChannelBinding, ChannelHandle, ChannelRegistry, InboundPublish, OutboundDrain,
+    RegisteredChannel,
+};
 pub use routing::{EthercatRouting, PdoDirection};
 pub use runner::{CycleReport, CycleRunner};
 pub use scheduler::{CycleDecision, CycleScheduler};

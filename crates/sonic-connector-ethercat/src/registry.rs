@@ -23,11 +23,42 @@
 //! [`ChannelDescriptor`]: sonic_connector_core::ChannelDescriptor
 
 use std::borrow::Cow;
+use std::fmt;
+
+use sonic_connector_core::ConnectorError;
 
 use crate::routing::{EthercatRouting, PdoDirection};
 
+/// Gateway-side outbound drain. `REQ_0326`.
+///
+/// Wraps an iceoryx2 subscriber whose publisher lives on the plugin
+/// side. The dispatcher calls [`Self::drain_into`] once per cycle per
+/// outbound channel to move the plugin's already-encoded bytes into
+/// the per-cycle PDI outputs.
+///
+/// `try_recv_into` semantics — the returned `Ok(Some(n))` reports the
+/// number of payload bytes copied into `dest[..n]`. Returning
+/// `Ok(None)` means "no envelope was pending"; the dispatcher moves
+/// on. Errors surface as [`ConnectorError`].
+pub trait OutboundDrain: Send {
+    /// Drain one envelope into `dest`. Implementations should be
+    /// non-blocking — the dispatcher calls this in a tight loop.
+    fn drain_into(&self, dest: &mut [u8]) -> Result<Option<usize>, ConnectorError>;
+}
+
+/// Gateway-side inbound publisher. `REQ_0327`.
+///
+/// Wraps an iceoryx2 publisher whose subscriber lives on the plugin
+/// side. The dispatcher calls [`Self::publish_bytes`] once per cycle
+/// per inbound channel after the PDI bit slice has been read out.
+pub trait InboundPublish: Send {
+    /// Publish `bytes` verbatim on the channel's inbound iceoryx2
+    /// service.
+    fn publish_bytes(&self, bytes: &[u8]) -> Result<(), ConnectorError>;
+}
+
 /// One entry in the [`ChannelRegistry`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RegisteredChannel {
     /// `ChannelDescriptor::name()` cloned at registration time.
     /// `Cow` so test fixtures can register `&'static` names without
@@ -45,19 +76,37 @@ pub struct RegisteredChannel {
     pub binding: ChannelBinding,
 }
 
-/// Channel ↔ iceoryx2 / bridge binding. Sealed enum opaque to user
-/// code; the gateway dispatcher matches on the variant.
+/// Channel ↔ iceoryx2 binding. Sealed enum opaque to user code; the
+/// gateway dispatcher matches on the variant per cycle.
 ///
-/// C7a only declares the variants and the stub `Unbound`; the
-/// concrete `Outbound` / `Inbound` variants land in C7b alongside
-/// the gateway dispatcher.
-#[derive(Clone, Debug)]
+/// The trait-object variants carry the gateway-side iceoryx2 port
+/// (subscriber for outbound, publisher for inbound) without exposing
+/// the channel's user-type `T` or codec `C` — only the byte slice
+/// stays in the dispatcher hot path (`REQ_0326`, `REQ_0327`).
 #[non_exhaustive]
 pub enum ChannelBinding {
-    /// Placeholder used by C7a tests and by the registry's stub-
-    /// construction helpers. C7b replaces this with concrete
-    /// iceoryx2 publisher / subscriber handles.
+    /// Stub variant retained from C7a — used in unit tests that
+    /// exercise the registry in isolation and as a transitional
+    /// placeholder before a real port is constructed.
     Unbound,
+    /// Plugin → gateway path. Holds the gateway-side iceoryx2
+    /// subscriber the dispatcher drains into the SubDevice's outputs
+    /// PDI slice.
+    Outbound(Box<dyn OutboundDrain>),
+    /// Gateway → plugin path. Holds the gateway-side iceoryx2
+    /// publisher the dispatcher feeds with bytes extracted from the
+    /// SubDevice's inputs PDI slice.
+    Inbound(Box<dyn InboundPublish>),
+}
+
+impl fmt::Debug for ChannelBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unbound => f.write_str("Unbound"),
+            Self::Outbound(_) => f.write_str("Outbound(<dyn OutboundDrain>)"),
+            Self::Inbound(_) => f.write_str("Inbound(<dyn InboundPublish>)"),
+        }
+    }
 }
 
 /// Opaque handle returned from [`ChannelRegistry::register`].

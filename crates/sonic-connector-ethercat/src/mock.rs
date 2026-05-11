@@ -44,6 +44,10 @@ struct MockState {
     default_cycle_wkc: u16,
     /// Number of `cycle` calls that have completed.
     cycle_calls: u32,
+    /// When `true`, every `cycle` call copies each SubDevice's
+    /// outputs buffer over its inputs buffer (synthetic loopback).
+    /// Used by `TEST_0222`.
+    loopback: bool,
 }
 
 impl MockBusDriver {
@@ -140,6 +144,54 @@ impl MockBusDriver {
         self
     }
 
+    /// Enable synthetic loopback: every subsequent `cycle` call
+    /// copies each SubDevice's outputs buffer over its inputs
+    /// buffer. Used by `TEST_0222` to exercise the full
+    /// iceoryx2 ↔ PDI ↔ iceoryx2 round-trip without hardware. The
+    /// outputs and inputs buffers for the same SubDevice address
+    /// must both be configured (via
+    /// [`Self::with_subdevice_outputs`] / [`Self::with_subdevice_inputs`]);
+    /// the inputs buffer is resized to match outputs on each cycle
+    /// if the lengths differ.
+    #[must_use]
+    pub fn with_loopback(self) -> Self {
+        self.lock().loopback = true;
+        self
+    }
+
+    /// Snapshot the outputs buffer for `address`. Returns `None`
+    /// when no buffer was configured for that SubDevice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another thread has poisoned the internal mutex by
+    /// panicking while holding it (build-only helper; not reached
+    /// in well-behaved tests).
+    #[must_use]
+    pub fn snapshot_outputs(&self, address: u16) -> Option<Vec<u8>> {
+        self.subdevice_outputs
+            .lock()
+            .expect("not poisoned")
+            .get(&address)
+            .cloned()
+    }
+
+    /// Snapshot the inputs buffer for `address`. Returns `None`
+    /// when no buffer was configured for that SubDevice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another thread has poisoned the internal mutex by
+    /// panicking while holding it.
+    #[must_use]
+    pub fn snapshot_inputs(&self, address: u16) -> Option<Vec<u8>> {
+        self.subdevice_inputs
+            .lock()
+            .expect("not poisoned")
+            .get(&address)
+            .cloned()
+    }
+
     /// Number of `bring_up` calls completed since construction.
     pub fn bring_up_calls(&self) -> u32 {
         self.lock().bring_up_calls
@@ -166,14 +218,33 @@ impl BusDriver for MockBusDriver {
     }
 
     async fn cycle(&mut self) -> Result<u16, ConnectorError> {
-        let wkc = {
+        let (wkc, loopback) = {
             let mut state = self.lock();
             state.cycle_calls += 1;
-            state
+            let wkc = state
                 .wkc_sequence
                 .pop_front()
-                .unwrap_or(state.default_cycle_wkc)
+                .unwrap_or(state.default_cycle_wkc);
+            (wkc, state.loopback)
         };
+        if loopback {
+            // Two short critical sections: snapshot outputs, then
+            // write them into inputs. Splitting the locks keeps each
+            // critical section bounded.
+            let outputs_snapshot: Vec<(u16, Vec<u8>)> = {
+                let guard = self.subdevice_outputs.lock().expect("not poisoned");
+                guard.iter().map(|(a, b)| (*a, b.clone())).collect()
+            };
+            let mut inputs = self.subdevice_inputs.lock().expect("not poisoned");
+            for (addr, bytes) in outputs_snapshot {
+                let entry = inputs.entry(addr).or_default();
+                if entry.len() != bytes.len() {
+                    entry.resize(bytes.len(), 0);
+                }
+                entry.copy_from_slice(&bytes);
+            }
+            drop(inputs);
+        }
         Ok(wkc)
     }
 

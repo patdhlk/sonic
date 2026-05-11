@@ -1695,10 +1695,17 @@ spec text that needed amendment during implementation.
      (multi-thread, default 1 worker per :need:`ADR_0026`) and
      joins it on ``Drop`` with a 5-second budget mirroring
      :need:`ARCH_0013` (``REQ_0321``).
-   * ``EthercatConnector<C: PayloadCodec>`` — implements the
-     framework ``Connector`` trait (``REQ_0310``); ``register_with``
-     currently contributes a no-op interval-triggered item that
-     C5c replaces with the bridge-draining dispatcher.
+   * ``EthercatConnector<D: BusDriver, C: PayloadCodec>`` —
+     implements the framework ``Connector`` trait (``REQ_0310``).
+     ``create_writer`` / ``create_reader`` open the plugin-side
+     iceoryx2 service named ``"{descriptor.name()}.out"`` /
+     ``".in"``, open the paired gateway-side raw port on the same
+     service, and register the channel in the shared
+     ``ChannelRegistry`` (``REQ_0223`` + ``REQ_0328``).
+     ``register_with`` (C7b) takes the configured driver out of the
+     connector and spawns ``dispatcher_loop`` on the gateway's
+     tokio runtime (``REQ_0321``); the framework still receives a
+     heartbeat ``ExecutableItem`` for ``REQ_0272``.
    * ``sdo::pdo_sdo_writes`` — pure function producing the
      ordered SDO write sequence (clear → entries → set-count
      on indices ``0x1C12`` and ``0x1C13``) that the gateway
@@ -1736,37 +1743,64 @@ spec text that needed amendment during implementation.
      slices (``REQ_0326``, ``REQ_0327``).
    * ``registry::ChannelRegistry`` — Vec-backed registry of
      ``RegisteredChannel { descriptor_name, routing,
-     direction, binding }``. Insertion-order iteration verified
-     by TEST_0219; per-cycle ``iter()`` is allocation-free
-     (verified via ``CountingAllocator`` across 1 000 cycles ×
-     16 channels — ``REQ_0328``).
+     direction, binding }``. C7b extends ``ChannelBinding`` with
+     ``Outbound(Box<dyn OutboundDrain>)`` and
+     ``Inbound(Box<dyn InboundPublish>)`` variants carrying the
+     gateway-side iceoryx2 ports (trait objects erase the
+     channel's user-type ``T`` and codec ``C``).
+     Insertion-order iteration verified by TEST_0219; per-cycle
+     ``iter()`` is allocation-free (verified via
+     ``CountingAllocator`` across 1 000 cycles × 16 channels —
+     ``REQ_0328``).
+   * ``dispatcher::dispatch_one_cycle`` /
+     ``dispatcher::dispatcher_loop`` (C7b) — gateway-side
+     byte-shovel composing ``pdi::write_routing`` /
+     ``pdi::read_routing`` + ``ChannelRegistry`` + the iceoryx2
+     raw pub/sub ports. ``dispatch_one_cycle`` is the
+     single-iteration synchronous form used by the
+     ``TEST_0220`` / ``TEST_0221`` / ``TEST_0222`` integration
+     tests; ``dispatcher_loop`` is the long-running ``async fn``
+     spawned by ``register_with``. The trait-object wrappers
+     ``IoxOutboundDrain<N>`` / ``IoxInboundPublish<N>`` adapt the
+     raw iceoryx2 reader / writer to ``OutboundDrain`` /
+     ``InboundPublish`` (``REQ_0326``, ``REQ_0327``, ``REQ_0328``).
+   * ``raw::RawChannelWriter<N>`` / ``raw::RawChannelReader<N>``
+     in ``sonic-connector-transport-iox`` — byte-only iceoryx2
+     ports used by the dispatcher. ``send_raw_bytes`` /
+     ``try_recv_into`` bypass the codec entirely, keeping the
+     dispatcher hot path codec-free (``REQ_0327`` amended in
+     C7b).
 
-   **Verification posture.** All 19 REQs covered by IMPL_0050
-   have a passing unit / integration test on every CI push *via
-   the* ``MockBusDriver`` and the pure-logic PDI / registry
-   helpers. ``EthercrabBusDriver`` provides the real-bus path for
+   **Verification posture.** Every REQ covered by IMPL_0050 has
+   a passing unit / integration test on every CI push.
+   ``EthercrabBusDriver`` provides the real-bus path for
    REQ_0312 (single MainDevice — one ``PduStorage::try_split``
    per driver), REQ_0313 (bus reaches OP — ``group.into_op``
    fast path), REQ_0314 + REQ_0315 (PDO mapping applied via
    ``pdo_sdo_writes`` + ``sdo_write`` during PRE-OP), and
-   REQ_0325 (Linux raw socket — ``tx_rx_task``). REQ_0326 /
-   REQ_0327's actual byte hops between iceoryx2 channels and
-   PDI buffers — the gateway-side dispatcher — is **deferred
-   to C7b**; C7a's pure-logic PDI translation + C5d's mock
-   driver verify the load-bearing logic, but the iceoryx2
-   ↔ PDI plumbing in the gateway's ``register_with`` still
-   carries a no-op stub item. C5e's hardware tests under
-   ``ETHERCAT_TEST_NIC`` continue to await physical hardware.
+   REQ_0325 (Linux raw socket — ``tx_rx_task``); those tests
+   await physical hardware under ``ETHERCAT_TEST_NIC``.
+   ``REQ_0326`` / ``REQ_0327`` / ``REQ_0328``'s end-to-end byte
+   hops are exercised against ``MockBusDriver`` via the C7b
+   integration tests ``TEST_0220`` (outbound),
+   ``TEST_0221`` (inbound), and ``TEST_0222`` (loopback
+   round-trip), so the iceoryx2 ↔ PDI ↔ iceoryx2 pipeline is
+   green in every CI run without hardware.
 
-   **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
+   **Tests.** Cases pass: TEST_0201 (routing round-trip),
    TEST_0204 + TEST_0206 (options builder), TEST_0205-partial
    (SDO write sequence shape), TEST_0207 (cycle scheduler
    skip-not-catch-up), TEST_0208 (DC opt-in flag), TEST_0209 +
    TEST_0210 (WKC policy), TEST_0211-partial (gateway tokio
    runtime ownership and clean drop), TEST_0212-0214 (bridge
-   bounded capacity, BackPressure, DroppedInbound), plus
-   surface-shape checks for TEST_0200 (Connector trait surface,
-   create_writer/reader iceoryx2 round-trip).
+   bounded capacity, BackPressure, DroppedInbound), TEST_0216-
+   0218 (PDI bit-slice byte-aligned / unaligned round-trips,
+   adjacent-slice preservation), TEST_0219 (registry
+   alloc-free iter), TEST_0220 (outbound end-to-end), TEST_0221
+   (inbound end-to-end), TEST_0222 (loopback round-trip via
+   mock), plus surface-shape checks for TEST_0200 (Connector
+   trait surface, ``create_writer`` / ``create_reader``
+   registration semantics).
 
 ----
 

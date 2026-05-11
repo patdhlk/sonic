@@ -15,7 +15,7 @@ serde                = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 serde      = { workspace = true, features = ["std", "derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
 
 [lints.rust]
 unsafe_code  = "allow"

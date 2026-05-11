@@ -25,7 +25,9 @@ pub mod channel;
 pub mod envelope;
 pub mod factory;
 mod now;
+pub mod raw;
 
 pub use channel::{ChannelReader, ChannelWriter, RecvEnvelope};
 pub use envelope::ConnectorEnvelope;
 pub use factory::ServiceFactory;
+pub use raw::{RawChannelReader, RawChannelWriter, RawSample, RawSendOutcome};

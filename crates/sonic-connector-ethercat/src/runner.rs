@@ -99,6 +99,13 @@ where
         &self.health
     }
 
+    /// Borrow the owned driver. Used by the gateway dispatcher (C7b)
+    /// to call the trait's PDI-callback methods between cycles.
+    #[must_use]
+    pub const fn driver(&self) -> &D {
+        &self.driver
+    }
+
     /// Decide whether to fire a cycle at `now`. If the scheduler
     /// reports `Skip`, returns `Ok(None)` and does not call the
     /// driver. If `Fire`, calls `driver.cycle()`, evaluates the WKC,

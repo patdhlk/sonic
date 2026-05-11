@@ -16,6 +16,7 @@ use sonic_connector_core::{ChannelDescriptor, ConnectorError, PayloadCodec, Rout
 
 use crate::channel::{ChannelReader, ChannelWriter};
 use crate::envelope::ConnectorEnvelope;
+use crate::raw::{RawChannelReader, RawChannelWriter};
 
 /// Wraps an iceoryx2 [`Node`] and opens pub/sub services on demand.
 ///
@@ -71,6 +72,38 @@ impl<'n> ServiceFactory<'n> {
             .create()
             .map_err(|e| ConnectorError::stack(svc_error(format!("subscriber: {e:?}"))))?;
         Ok(ChannelReader::new(subscriber, codec))
+    }
+
+    /// Open or create the pub/sub service `name` and return a
+    /// [`RawChannelWriter`]. Used by the gateway dispatcher
+    /// (`REQ_0327`) to publish PDI bit-slice bytes back to the plugin
+    /// without invoking the channel's codec.
+    pub fn create_raw_writer_named<const N: usize>(
+        &self,
+        name: &str,
+    ) -> Result<RawChannelWriter<N>, ConnectorError> {
+        let service = self.open_pubsub::<N>(name)?;
+        let publisher = service
+            .publisher_builder()
+            .create()
+            .map_err(|e| ConnectorError::stack(svc_error(format!("publisher: {e:?}"))))?;
+        Ok(RawChannelWriter::new(publisher))
+    }
+
+    /// Open or create the pub/sub service `name` and return a
+    /// [`RawChannelReader`]. Used by the gateway dispatcher
+    /// (`REQ_0326`) to drain plugin-side publisher envelopes into a
+    /// caller-provided buffer without invoking the channel's codec.
+    pub fn create_raw_reader_named<const N: usize>(
+        &self,
+        name: &str,
+    ) -> Result<RawChannelReader<N>, ConnectorError> {
+        let service = self.open_pubsub::<N>(name)?;
+        let subscriber = service
+            .subscriber_builder()
+            .create()
+            .map_err(|e| ConnectorError::stack(svc_error(format!("subscriber: {e:?}"))))?;
+        Ok(RawChannelReader::new(subscriber))
     }
 
     fn open_pubsub<const N: usize>(
