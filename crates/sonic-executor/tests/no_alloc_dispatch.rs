@@ -7,6 +7,12 @@
 //! steady-state allocations from the one-time setup that happens
 //! at the top of `dispatch_loop` (WaitSet construction, trigger
 //! attachment, iceoryx2 lazy init).
+//!
+//! All cases live inside a single `#[test]` function so cargo's
+//! parallel test runner cannot interleave another test's allocations
+//! into the measurement window. The `CountingAllocator` is
+//! process-wide; a per-test Mutex would not protect against the
+//! harness's pre-body buffer allocations on a sibling worker thread.
 
 #![allow(missing_docs)]
 #![allow(clippy::doc_markdown, clippy::cast_possible_wrap)]
@@ -68,96 +74,93 @@ fn per_iter_allocs(exec: &mut Executor) -> i64 {
 }
 
 #[test]
-fn dispatch_zero_alloc_single_thread_chain() {
-    let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    exec.add_chain(trivial_chain()).unwrap();
+fn dispatch_is_zero_allocation() {
+    // Case 1: single-threaded chain.
+    {
+        let mut exec = Executor::builder().worker_threads(0).build().unwrap();
+        exec.add_chain(trivial_chain()).unwrap();
+        let per_iter = per_iter_allocs(&mut exec);
+        assert_eq!(
+            per_iter, 0,
+            "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (single-threaded chain)"
+        );
+    }
 
-    let per_iter = per_iter_allocs(&mut exec);
-    assert_eq!(
-        per_iter, 0,
-        "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (single-threaded chain)"
-    );
-}
+    // Case 2: two-worker chain.
+    {
+        let mut exec = Executor::builder().worker_threads(2).build().unwrap();
+        exec.add_chain(trivial_chain()).unwrap();
+        let per_iter = per_iter_allocs(&mut exec);
+        assert_eq!(
+            per_iter, 0,
+            "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (2 worker threads, chain)"
+        );
+    }
 
-#[test]
-fn dispatch_zero_alloc_two_workers_chain() {
-    let mut exec = Executor::builder().worker_threads(2).build().unwrap();
-    exec.add_chain(trivial_chain()).unwrap();
+    // Case 3: diamond graph with two workers.
+    {
+        let mut exec = Executor::builder().worker_threads(2).build().unwrap();
+        let mut g = exec.add_graph();
+        let r = g.vertex(item_with_triggers(
+            |d| {
+                d.interval(Duration::from_millis(1));
+                Ok(())
+            },
+            |_| Ok(ControlFlow::Continue),
+        ));
+        let l = g.vertex(item(|_| Ok(ControlFlow::Continue)));
+        let rt = g.vertex(item(|_| Ok(ControlFlow::Continue)));
+        let m = g.vertex(item(|_| Ok(ControlFlow::Continue)));
+        g.edge(r, l).edge(r, rt).edge(l, m).edge(rt, m).root(r);
+        g.build().unwrap();
+        let per_iter = per_iter_allocs(&mut exec);
+        assert_eq!(
+            per_iter, 0,
+            "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (graph diamond, 2 workers)"
+        );
+    }
 
-    let per_iter = per_iter_allocs(&mut exec);
-    assert_eq!(
-        per_iter, 0,
-        "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (2 worker threads, chain)"
-    );
-}
+    // Case 4: single-threaded single item.
+    {
+        let mut exec = Executor::builder().worker_threads(0).build().unwrap();
+        let it = item_with_triggers(
+            |d| {
+                d.interval(Duration::from_millis(1));
+                Ok(())
+            },
+            |_| Ok(ControlFlow::Continue),
+        );
+        exec.add(it).unwrap();
+        let per_iter = per_iter_allocs(&mut exec);
+        assert_eq!(
+            per_iter, 0,
+            "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (single-threaded, Single task)"
+        );
+    }
 
-#[test]
-fn dispatch_zero_alloc_graph_diamond_two_workers() {
-    let mut exec = Executor::builder().worker_threads(2).build().unwrap();
-    let mut g = exec.add_graph();
-    let r = g.vertex(item_with_triggers(
-        |d| {
-            d.interval(Duration::from_millis(1));
-            Ok(())
-        },
-        |_| Ok(ControlFlow::Continue),
-    ));
-    let l = g.vertex(item(|_| Ok(ControlFlow::Continue)));
-    let rt = g.vertex(item(|_| Ok(ControlFlow::Continue)));
-    let m = g.vertex(item(|_| Ok(ControlFlow::Continue)));
-    g.edge(r, l).edge(r, rt).edge(l, m).edge(rt, m).root(r);
-    g.build().unwrap();
-
-    let per_iter = per_iter_allocs(&mut exec);
-    assert_eq!(
-        per_iter, 0,
-        "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (graph diamond, 2 workers)"
-    );
-}
-
-#[test]
-fn dispatch_zero_alloc_single_thread_single_item() {
-    let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    let it = item_with_triggers(
-        |d| {
-            d.interval(Duration::from_millis(1));
-            Ok(())
-        },
-        |_| Ok(ControlFlow::Continue),
-    );
-    exec.add(it).unwrap();
-
-    let per_iter = per_iter_allocs(&mut exec);
-    assert_eq!(
-        per_iter, 0,
-        "REQ_0060 violated: ~{per_iter} steady-state allocations per iteration (single-threaded, Single task)"
-    );
-}
-
-// ── Negative case: harness must catch a deliberate per-iteration alloc ─────
-
-#[test]
-fn harness_catches_deliberate_allocation() {
-    let mut exec = Executor::builder().worker_threads(0).build().unwrap();
-    let head = item_with_triggers(
-        |d| {
-            d.interval(Duration::from_millis(1));
-            Ok(())
-        },
-        |_| {
-            // Deliberate per-iteration heap allocation.
-            let v: Vec<u8> = vec![1, 2, 3];
-            core::hint::black_box(&v);
-            Ok(ControlFlow::Continue)
-        },
-    );
-    exec.add(head).unwrap();
-
-    exec.run_n(1).unwrap();
-
-    let (allocs, ()) = count_allocs(|| exec.run_n(10).unwrap());
-    assert!(
-        allocs >= 10,
-        "harness regression: counting allocator did not catch deliberate vec! allocations (saw {allocs})"
-    );
+    // Case 5 — negative: harness must catch a deliberate per-iteration
+    // alloc. If this case stops firing, the counting allocator has lost
+    // visibility into worker-thread allocations and the other four
+    // cases are meaningless.
+    {
+        let mut exec = Executor::builder().worker_threads(0).build().unwrap();
+        let head = item_with_triggers(
+            |d| {
+                d.interval(Duration::from_millis(1));
+                Ok(())
+            },
+            |_| {
+                let v: Vec<u8> = vec![1, 2, 3];
+                core::hint::black_box(&v);
+                Ok(ControlFlow::Continue)
+            },
+        );
+        exec.add(head).unwrap();
+        exec.run_n(1).unwrap();
+        let (allocs, ()) = count_allocs(|| exec.run_n(10).unwrap());
+        assert!(
+            allocs >= 10,
+            "harness regression: counting allocator did not catch deliberate vec! allocations (saw {allocs})"
+        );
+    }
 }
