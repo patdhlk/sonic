@@ -1617,7 +1617,7 @@ spec text that needed amendment during implementation.
    ``HealthSubscription`` delivers events published on the
    connector's internal health channel.
 
-.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c)
+.. impl:: sonic-connector-ethercat crate (C5a + C5b + C5c + C5d)
    :id: IMPL_0050
    :status: open
    :implements: BB_0030
@@ -1650,13 +1650,17 @@ spec text that needed amendment during implementation.
    the trust-me-but-untested posture the framework otherwise
    avoids.
 
-   The remaining wiring is tracked as a follow-on commit
-   ("C5d") that lands when a developer with ``CAP_NET_RAW`` on a
-   Linux gateway host can iterate the bring-up code against a
-   real bus, *or* when the project moves to a ``BusDriver``
-   trait abstraction with a ``MockBusDriver`` in
-   ``dev-dependencies`` (the latter is the simpler path if real
-   hardware remains unavailable).
+   C5d takes the second path: defines the [``BusDriver``] trait
+   that abstracts over "the operations the cycle loop needs from a
+   real EtherCAT bus", ships an in-tree [``MockBusDriver``] that
+   makes the cycle loop exhaustively testable without hardware,
+   and a [``CycleRunner``] that composes ``CycleScheduler``,
+   ``BusDriver``, ``evaluate_wkc``, and ``EthercatHealthMonitor``
+   into one cycle-driving unit. The real ``EthercrabBusDriver``
+   that wraps ``ethercrab::MainDevice`` is tracked as C5e — its
+   compile-checked structure lands once the API surface settles
+   enough to wire without hardware iteration, and its on-the-wire
+   verification still requires ``ETHERCAT_TEST_NIC``.
 
    **Surface.**
 
@@ -1696,15 +1700,34 @@ spec text that needed amendment during implementation.
      produces exactly one fire (``REQ_0317``).
    * ``wkc::evaluate_wkc`` + ``WkcVerdict::degraded_reason`` —
      working-counter health policy (``REQ_0319``, ``REQ_0320``).
+   * ``driver::BusDriver`` — async trait abstracting the
+     bring-up + per-cycle operations the runner needs from a
+     concrete back-end (`REQ_0312` / `REQ_0313` / `REQ_0315`
+     are encoded in the contract; concrete impls cover them).
+   * ``mock::MockBusDriver`` — programmable test fixture: WKC
+     sequences, configurable bring-up response, bring-up
+     failure injection. In-tree so downstream connector crates
+     can compose with it.
+   * ``runner::CycleRunner<D: BusDriver>`` — composes
+     ``CycleScheduler`` + ``BusDriver`` + ``evaluate_wkc`` +
+     ``EthercatHealthMonitor``. End-to-end tested via
+     ``MockBusDriver``: bring-up transitions ``Connecting → Up``,
+     matching WKC keeps the connector ``Up``, mismatching WKC
+     transitions to ``Degraded`` with the offending cycle index
+     in the reason, scheduler enforces skip-not-catch-up across
+     ``tick`` calls, observed ``HealthEvent`` sequence matches
+     the expected ``Up → Degraded → Up`` pattern over a wkc
+     sequence.
 
    **Not yet refined by IMPL_0050.** REQ_0312 (single
    MainDevice per gateway), REQ_0313 (bus reaches OP before
    traffic), REQ_0325 (Linux raw socket / CAP_NET_RAW). All
-   three require the ``ethercrab`` cycle-loop wiring; the
-   forward-compatible ``bus`` module ships the type alias +
-   macro for the storage hand-off, but the runtime
-   ``MainDevice`` ownership and ``tx_rx_task`` spawn are the
-   load-bearing parts and remain in the C5d follow-on.
+   three are encoded in the ``BusDriver`` trait's contract
+   ("a bring-up that succeeds transitions an actual bus to
+   OP via one MainDevice over CAP_NET_RAW"); they remain
+   ``open`` until C5e ships ``EthercrabBusDriver`` and lets
+   the bus-side ``ETHERCAT_TEST_NIC`` integration tests
+   provide the on-the-wire verification.
 
    **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
    TEST_0204 + TEST_0206 (options builder), TEST_0205-partial

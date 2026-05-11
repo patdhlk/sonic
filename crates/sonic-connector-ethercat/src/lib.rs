@@ -40,22 +40,28 @@ pub mod bridge;
 #[cfg(feature = "bus-integration")]
 pub mod bus;
 pub mod connector;
+pub mod driver;
 pub mod gateway;
 pub mod health;
+pub mod mock;
 pub mod options;
 pub mod routing;
+pub mod runner;
 pub mod scheduler;
 pub mod sdo;
 pub mod wkc;
 
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 pub use connector::EthercatConnector;
+pub use driver::{BringUp, BusDriver};
 pub use gateway::EthercatGateway;
 pub use health::EthercatHealthMonitor;
+pub use mock::MockBusDriver;
 pub use options::{
     EthercatConnectorOptions, EthercatConnectorOptionsBuilder, PdoEntry, SubDeviceMap,
 };
 pub use routing::{EthercatRouting, PdoDirection};
+pub use runner::{CycleReport, CycleRunner};
 pub use scheduler::{CycleDecision, CycleScheduler};
 pub use sdo::{SM_ASSIGN_RX_PDO, SM_ASSIGN_TX_PDO, SdoValue, SdoWrite, pdo_sdo_writes};
 pub use wkc::{WkcVerdict, evaluate_wkc};
