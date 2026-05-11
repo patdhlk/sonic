@@ -484,6 +484,56 @@ exercised without hardware. Bench tests run only when invoked as
    ``CAP_NET_RAW`` is absent, gateway startup fails with a
    permission error before any EtherCAT frame is sent.
 
+.. test:: PDI bit-slice byte-aligned round-trip
+   :id: TEST_0216
+   :status: open
+   :verifies: REQ_0326, REQ_0327
+
+   Pure-logic test of the ``pdi`` module. For a representative
+   set of ``(bit_offset, bit_length)`` pairs where both endpoints
+   are byte-aligned (``bit_offset % 8 == 0``,
+   ``bit_length % 8 == 0``), the round-trip
+   ``write_routing(buf, routing, value); read_routing(buf, routing)``
+   shall yield the original ``value`` byte-for-byte, with no
+   modification to PDI bytes outside the slice. Property test via
+   ``proptest`` over slice positions, lengths, and pre-existing
+   buffer contents.
+
+.. test:: PDI bit-slice unaligned round-trip
+   :id: TEST_0217
+   :status: open
+   :verifies: REQ_0326, REQ_0327
+
+   Property test for the same round-trip as :need:`TEST_0216` but
+   covering ``bit_offset`` and ``bit_length`` values that are not
+   multiples of 8. Verifies that read-modify-write on partial
+   leading / trailing bytes preserves the unaffected bits exactly
+   (no spillover into adjacent slices).
+
+.. test:: Adjacent PDI bit slices do not interfere
+   :id: TEST_0218
+   :status: open
+   :verifies: REQ_0326
+
+   Construct two ``EthercatRouting`` declarations whose bit slices
+   are adjacent (e.g. slice A = bits 0..12, slice B = bits 12..24
+   on the same SubDevice / direction). Write distinct values to A
+   and B in arbitrary order; read both back. Both reads shall
+   return the original written values; neither write shall corrupt
+   the other slice.
+
+.. test:: Per-channel routing registry has stable iteration order
+   :id: TEST_0219
+   :status: open
+   :verifies: REQ_0328
+
+   When the application registers N channel descriptors in order
+   ``D_1 … D_N`` via ``create_writer`` / ``create_reader``, the
+   gateway's cycle-loop iteration over the registry shall visit
+   them in the same order on every cycle. Property test confirms
+   the order is stable across 1 000 cycles and zero per-cycle
+   allocations are observed via ``CountingAllocator``.
+
 ----
 
 Workspace end-to-end tests

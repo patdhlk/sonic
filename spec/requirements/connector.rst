@@ -660,6 +660,51 @@ EtherCAT reference connector
    socket, requiring the ``CAP_NET_RAW`` capability on the gateway
    process.
 
+.. req:: Outbound payload written to PDI bit slice per routing
+   :id: REQ_0326
+   :status: open
+   :satisfies: FEAT_0041
+
+   When a plugin publishes a value through ``ChannelWriter::send``, the
+   gateway shall, before the next cycle's ``tx_rx`` call, write the
+   codec-encoded payload into the cycle's outbound PDI buffer at the
+   bit offset and bit length declared by the channel's
+   :need:`REQ_0311` ``EthercatRouting``. The write shall target the
+   SubDevice's process image starting at ``bit_offset`` from the
+   start of that SubDevice's outputs region, covering exactly
+   ``bit_length`` bits. The framework shall preserve adjacent bit
+   slices (read-modify-write on partial leading / trailing bytes).
+
+.. req:: Inbound payload read from PDI bit slice per routing
+   :id: REQ_0327
+   :status: open
+   :satisfies: FEAT_0041
+
+   After each cycle's ``tx_rx`` call returns successfully, the gateway
+   shall, for every registered inbound channel, extract
+   ``bit_length`` bits starting at ``bit_offset`` from the SubDevice's
+   process image inputs region (per the channel's
+   :need:`REQ_0311` ``EthercatRouting``), decode the resulting byte
+   slice via the channel's codec, and publish the decoded value on
+   the channel's inbound iceoryx2 service. Reads shall not modify the
+   PDI buffer.
+
+.. req:: Per-channel routing registry on the gateway
+   :id: REQ_0328
+   :status: open
+   :satisfies: FEAT_0041
+
+   The gateway shall maintain a registry mapping each open
+   ``ChannelDescriptor`` to its ``EthercatRouting`` and direction
+   (RxPDO outbound / TxPDO inbound), populated when the application
+   calls ``Connector::create_writer`` / ``Connector::create_reader``.
+   The cycle loop shall iterate this registry on every cycle —
+   draining the outbound bridge for each Rx channel, repopulating
+   the inbound iceoryx2 service for each Tx channel — without per-
+   cycle heap allocation (no ``Vec`` resize, no ``HashMap``
+   re-hash). Required by :need:`REQ_0060` from the steady-state
+   posture: connector dispatch shall not allocate.
+
 Host wiring
 ~~~~~~~~~~~
 
