@@ -276,9 +276,16 @@ Connection lifecycle
    :status: open
    :satisfies: FEAT_0034
 
-   ``Connector::subscribe_health()`` shall return a sonic-executor
-   ``Channel<HealthEvent>`` so callers can wire health transitions into
-   ``ExecutableItem`` triggers.
+   ``Connector::subscribe_health()`` shall return an observable handle
+   over the connector's ``HealthEvent`` stream so callers can wire
+   health transitions into ``ExecutableItem`` triggers. The handle
+   type is connector-implementation dependent — typically a
+   sonic-executor ``Channel<HealthEventWire>`` (where
+   ``HealthEventWire`` is the POD wire form, preferred for
+   cross-process gateways) or a thin in-process wrapper around a
+   ``crossbeam_channel::Receiver<HealthEvent>`` (acceptable when the
+   plugin and gateway share an address space). The choice is recorded
+   in the connector's ``impl::`` directive (e.g. :need:`IMPL_0040`).
 
 .. req:: ReconnectPolicy trait
    :id: REQ_0232

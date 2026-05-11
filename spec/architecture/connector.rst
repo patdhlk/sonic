@@ -552,36 +552,57 @@ that ``:refines:`` the requirement or feature it answers.
    runtime-discovered PDO maps (e.g. EEPROM-parsed) must roll their
    own ``&'static`` storage or wait for a runtime-PDO follow-on spec.
 
-.. arch-decision:: Verification harness — ethercrab MockMainDevice + env-gated integration tests
+.. arch-decision:: Verification harness — pure-logic unit tests + env-gated bus tests
    :id: ADR_0028
    :status: open
    :refines: FEAT_0041
 
    **Context.** :need:`FEAT_0041` ships 16 TEST artefacts
-   (TEST_0220..TEST_0235) verifying REQ_0310..REQ_0325. Six of those
-   tests exercise real bus state transitions, PDO mapping, working
-   counter, and DC bring-up — operations that need a MainDevice.
-   ethercrab offers a ``MockMainDevice`` that simulates SubDevice
-   responses without touching a NIC; full bus integration needs a
-   loopback NIC or real hardware.
+   (TEST_0200..TEST_0215) verifying REQ_0310..REQ_0325. Six of those
+   tests (TEST_0203, TEST_0205, TEST_0208, TEST_0209, TEST_0210,
+   TEST_0215) exercise real bus state transitions, PDO mapping
+   application, working-counter accounting, DC bring-up, or raw
+   socket access — operations that need either an ``ethercrab``
+   ``MainDevice`` driving a real NIC or a mock that simulates
+   SubDevice responses. An earlier draft of this ADR assumed
+   ``ethercrab`` shipped a ``MockMainDevice``; it does not (as of
+   ``ethercrab`` 0.7), so the verification strategy below is the
+   actual approach taken.
 
-   **Decision.** Unit tests in ``crates/sonic-connector-ethercat/src``
-   use ethercrab's ``MockMainDevice`` (covers
-   TEST_0220..TEST_0227, TEST_0231..TEST_0234 — trait-shape, routing,
-   options, bounded-bridge behaviour, health state machine).
-   Integration tests in ``crates/sonic-connector-ethercat/tests`` are
-   gated on the ``ETHERCAT_TEST_NIC`` environment variable; absent the
-   variable they ``skip!`` rather than failing. CI runs the unit
-   tests on every push; the integration suite runs only on the
-   gateway host (Linux + CAP_NET_RAW) as a manual workflow.
+   **Decision.** The connector's testable logic is factored into
+   pure-Rust modules — :need:`IMPL_0050`'s ``sdo`` (SDO write
+   sequence generation), ``scheduler`` (cycle-time pacing with
+   skip-not-catch-up semantics), ``wkc`` (working-counter health
+   policy), ``bridge`` (bounded outbound / inbound bridges),
+   ``health`` (health monitor + broadcast), ``options`` (typed
+   builder with default-clamp), and ``routing`` — and unit-tested
+   deterministically without ``ethercrab`` on the wire (TEST_0201,
+   TEST_0204, TEST_0205-partial, TEST_0206, TEST_0207, TEST_0209,
+   TEST_0210, TEST_0211-partial, TEST_0212, TEST_0213, TEST_0214 all
+   land via this path). The remaining bus-driven tests
+   (TEST_0202, TEST_0203, TEST_0205-full, TEST_0208 wire-side,
+   TEST_0211-full, TEST_0215) live in
+   ``crates/sonic-connector-ethercat/tests`` and are gated on the
+   ``ETHERCAT_TEST_NIC`` environment variable; absent the variable
+   they ``skip!`` rather than failing. CI runs the pure-logic tests
+   on every push; the bus suite runs only on the gateway host
+   (Linux + CAP_NET_RAW) as a manual workflow.
 
    **Consequences.** ✅ Every PR build is green on every developer
    machine and CI runner — no flaky "missing NIC" failures.
-   ✅ The integration suite still exists in-tree and is one
-   ``ETHERCAT_TEST_NIC=eth0`` away from running. ❌ The integration
+   ✅ The factored pure-logic modules (``sdo`` / ``scheduler`` /
+   ``wkc``) carry the gateway's load-bearing decision logic and are
+   exhaustively tested. ✅ The bus suite still exists in-tree and is
+   one ``ETHERCAT_TEST_NIC=eth0`` away from running. ❌ The bus
    tests are not on the CI gate; a regression that only surfaces on
    real hardware will only be caught when the gateway host runs the
-   suite. Documented in this ADR as an accepted risk.
+   suite — documented as an accepted risk. ❌ Without a mock, the
+   bridge between ``ethercrab``'s ``MainDevice`` API and the
+   pure-logic helpers is itself untested at unit level; a follow-on
+   may introduce a trait abstraction (``BusDriver`` with a
+   ``MockBusDriver`` impl in ``dev-dependencies``) once the
+   integration surface is stable enough for the abstraction not to
+   churn.
 
 ----
 
@@ -1424,6 +1445,254 @@ throughput) become first-class.
    shape for keeping non-deterministic protocol code OUT of an
    ASIL-rated control loop, but the framework itself makes no safety
    integrity claims.
+
+----
+
+13. Implementations
+-------------------
+
+The framework's building blocks (:need:`BB_0001`, :need:`BB_0002`,
+:need:`BB_0003`, :need:`BB_0005`) and the EtherCAT reference connector
+(:need:`BB_0030` and its sub-blocks) ship as five workspace crates.
+Each crate has its own ``impl::`` directive recording which BB it
+realises, which requirements it refines, and any deviations from the
+spec text that needed amendment during implementation.
+
+.. impl:: sonic-connector-core crate
+   :id: IMPL_0010
+   :status: open
+   :implements: BB_0001
+   :refines: REQ_0201, REQ_0210, REQ_0213, REQ_0214, REQ_0221, REQ_0222, REQ_0230, REQ_0232, REQ_0233, REQ_0234
+
+   **Crate.** ``crates/sonic-connector-core``. No iceoryx2 or
+   tokio dependency; the crate is the framework's small-types layer.
+   Depends on ``thiserror``, ``serde``, ``rand`` (jitter for
+   ``ExponentialBackoff``); ``proptest`` dev-only.
+
+   **Surface.**
+
+   * ``Routing`` marker trait (``REQ_0222``).
+   * ``ChannelDescriptor<R: Routing, const N: usize>`` with
+     empty-name validation (``REQ_0201``, ``REQ_0221``).
+   * ``PayloadCodec`` trait — encode / decode + ``format_name``
+     (``REQ_0210``). Used as a generic-parameter constraint by
+     concrete connectors.
+   * ``ConnectorError`` — ``Codec`` / ``BackPressure`` /
+     ``PayloadOverflow`` / ``InvalidDescriptor`` / ``Down`` /
+     ``Stack`` (``REQ_0213``, ``REQ_0214``).
+   * ``ConnectorHealth`` + ``ConnectorHealthKind`` + ``HealthEvent``
+     + ``HealthMonitor`` + ``IllegalTransition`` — enforces the
+     ARCH_0012 transition matrix; legal transitions emit one
+     event, illegal pairs return ``IllegalTransition`` or panic in
+     the panic-on-illegal helper (``REQ_0230``, ``REQ_0234``).
+   * ``ReconnectPolicy`` trait + ``ExponentialBackoff`` /
+     ``ExponentialBackoffBuilder`` — seedable RNG for
+     deterministic tests; jitter / growth / max delay clamps at
+     ``build()`` time (``REQ_0232``, ``REQ_0233``).
+
+   **Tests.** TEST_0100 (``ExponentialBackoff`` invariants,
+   proptest); TEST_0101 (state-machine transitions + illegal-pair
+   rejection); TEST_0103 (``ChannelDescriptor`` validation).
+
+.. impl:: sonic-connector-transport-iox crate
+   :id: IMPL_0020
+   :status: open
+   :implements: BB_0002
+   :refines: REQ_0200, REQ_0202, REQ_0203, REQ_0204, REQ_0205, REQ_0206, REQ_0214
+
+   **Crate.** ``crates/sonic-connector-transport-iox``. Depends on
+   ``sonic-connector-core``, ``iceoryx2``, ``serde``.
+
+   **Surface.**
+
+   * ``ConnectorEnvelope<const N: usize>`` — ``#[repr(C)]`` POD
+     with ``ZeroCopySend`` (``REQ_0200``): sequence_number,
+     timestamp_ns, 32-byte correlation_id, payload_len, reserved
+     word, and inline ``[u8; N]`` payload buffer.
+   * ``ChannelWriter<T, C, const N: usize>`` — typed publisher.
+     ``send`` / ``send_with_correlation`` use
+     ``Publisher::loan_uninit`` and a raw-pointer view of the
+     inline payload array so codec writes hit shared memory
+     directly with no intermediate user-side buffer (``REQ_0205``).
+     Sequence numbers are claimed via ``fetch_add`` *only after*
+     a successful codec encode, so failed sends do not advance
+     the counter (``REQ_0202``, exercised by TEST_0125).
+   * ``ChannelReader<T, C, const N: usize>`` — typed subscriber;
+     ``try_recv`` surfaces codec failures as
+     ``ConnectorError::Codec`` rather than silently dropping the
+     envelope (``REQ_0214``).
+   * ``ServiceFactory`` — opens / creates the iceoryx2 pub/sub
+     service for a ``ChannelDescriptor`` (``REQ_0206``). The
+     two-direction split mandated by ``REQ_0206`` (outbound vs
+     inbound) is intentionally realised at the host layer
+     (:need:`BB_0005`): each side constructs descriptors with
+     a direction suffix, and ``ServiceFactory`` opens one
+     service per descriptor.
+
+   **Tests.** Integration tests against real iceoryx2 services:
+   TEST_0120 (round-trip), TEST_0121 (sequence monotonicity),
+   TEST_0122 (timestamp at send), TEST_0123 (correlation id
+   verbatim + default zero), TEST_0125 (payload overflow rejection
+   + no sequence advance).
+
+.. impl:: sonic-connector-codec crate
+   :id: IMPL_0030
+   :status: open
+   :implements: BB_0003
+   :refines: REQ_0210, REQ_0212, REQ_0213, REQ_0214
+
+   **Crate.** ``crates/sonic-connector-codec``. Re-exports
+   ``PayloadCodec`` from ``sonic-connector-core``; ships
+   ``JsonCodec`` behind a default-on ``json`` cargo feature
+   (``REQ_0212``).
+
+   **Surface.** ``JsonCodec`` writes directly into the
+   caller-provided buffer via a tiny ``CountingWriter`` adapter
+   wrapping ``serde_json::to_writer``. Buffer-too-small surfaces
+   as ``ConnectorError::PayloadOverflow`` (with ``actual``
+   computed on the error path via a fallback ``to_vec`` —
+   the success path stays allocation-free); other serializer
+   faults (non-string map keys, etc.) surface as
+   ``ConnectorError::Codec`` carrying ``format = "json"`` and the
+   underlying ``serde_json::Error`` (``REQ_0213``).
+
+   Decode delegates to ``serde_json::from_slice``; truncated /
+   wrong-shape / wrong-type / empty input all surface as
+   ``ConnectorError::Codec`` rather than being silently dropped
+   (``REQ_0214``).
+
+   **Tests.** TEST_0110 (round-trip proptest), TEST_0111 (encode
+   error paths — see the amended :need:`TEST_0111` text routing
+   buffer-too-small to ``PayloadOverflow``), TEST_0112 (decode
+   error paths).
+
+.. impl:: sonic-connector-host crate
+   :id: IMPL_0040
+   :status: open
+   :implements: BB_0005
+   :refines: REQ_0220, REQ_0223, REQ_0231, REQ_0270, REQ_0271, REQ_0272, REQ_0273
+
+   **Crate.** ``crates/sonic-connector-host``. Depends on
+   ``sonic-connector-core``, ``sonic-connector-transport-iox``,
+   ``sonic-executor``, ``crossbeam-channel``. Optional
+   ``sonic-executor-tracing`` dep behind a default-off ``tracing``
+   feature (``REQ_0273``).
+
+   **Surface.**
+
+   * ``Connector`` trait — associated ``Routing`` / ``Codec``
+     types; methods ``name`` / ``health`` / ``subscribe_health``
+     / ``register_with`` / ``create_writer<T, N>`` /
+     ``create_reader<T, N>`` (``REQ_0220``, ``REQ_0223``). Not
+     dyn-compatible — concrete connectors plug into the host one
+     at a time via ``ConnectorHost::register<C: Connector>``.
+   * ``HealthSubscription`` — receive-only handle wrapping a
+     ``crossbeam_channel::Receiver<HealthEvent>``. Per the
+     amended :need:`REQ_0231`, this is the in-process
+     implementation of the spec's "observable handle" contract;
+     the alternative cross-process form using
+     ``sonic_executor::Channel<HealthEventWire>`` is deferred
+     until a real connector exercises out-of-process health
+     observation.
+   * ``ConnectorHost::builder()`` + ``register`` +
+     ``run`` / ``run_for`` / ``run_n`` (``REQ_0270``,
+     ``REQ_0272``). Owns the underlying
+     ``sonic_executor::Executor`` and exposes a ``Stoppable``
+     handle for external shutdown.
+   * ``ConnectorGateway::builder()`` — parallel construction for
+     the gateway side (``REQ_0271``).
+
+   **Deviation from :need:`REQ_0273`.** The default-off
+   ``tracing`` cargo feature is wired (deps pull
+   ``sonic-executor-tracing`` when the feature is on); the
+   ``Observer`` adapter implementation that forwards
+   ``HealthEvent`` and ``ExecutionMonitor`` callbacks through the
+   global ``tracing`` subscriber is deferred until a real
+   connector emits HealthEvents on a tracing subscriber under
+   load. Tracked for a follow-on implementation commit.
+
+   **Tests.** Integration test using a minimal in-tree
+   ``EchoConnector`` exercises the full host
+   register → run → executable-item-driven loop and confirms
+   ``HealthSubscription`` delivers events published on the
+   connector's internal health channel.
+
+.. impl:: sonic-connector-ethercat crate (C5a + C5b)
+   :id: IMPL_0050
+   :status: open
+   :implements: BB_0030
+   :refines: REQ_0310, REQ_0311, REQ_0314, REQ_0315, REQ_0316, REQ_0317, REQ_0318, REQ_0319, REQ_0320, REQ_0321, REQ_0322, REQ_0323, REQ_0324
+
+   **Crate.** ``crates/sonic-connector-ethercat``. Depends on
+   ``sonic-connector-core``, ``sonic-connector-transport-iox``,
+   ``sonic-connector-host``, ``sonic-executor``,
+   ``crossbeam-channel``, ``tokio`` (``rt`` +
+   ``rt-multi-thread`` + ``macros`` + ``sync``).
+
+   **Status.** C5a + C5b together land the protocol-agnostic
+   core: routing, options builder, bridges, health monitor,
+   tokio runtime lifecycle, ``Connector`` trait impl, and the
+   pure-logic helpers (``sdo`` / ``scheduler`` / ``wkc``) that
+   carry the gateway's load-bearing decision logic. C5c —
+   tracked separately — adds the ``ethercrab`` dependency,
+   wires ``MainDevice`` into ``EthercatGateway``, spawns
+   ``tx_rx_task``, and integrates the pure-logic helpers
+   against a real bus.
+
+   **Surface.**
+
+   * ``EthercatRouting`` — typed routing identifying one
+     process-data slice by SubDevice address, PDO direction, bit
+     offset, bit length. Implements ``Routing`` (``REQ_0311``).
+   * ``EthercatConnectorOptions`` typed builder —
+     ``cycle_time`` (default 2 ms, min 1 ms clamp; ``REQ_0316``),
+     ``distributed_clocks`` opt-in (``REQ_0318``), bounded
+     bridge capacities (``REQ_0322``), network interface name,
+     ``&'static [SubDeviceMap]`` PDO descriptor (``REQ_0314``,
+     :need:`ADR_0027`), tokio worker-thread count
+     (:need:`ADR_0026`).
+   * ``OutboundBridge<T>`` — bounded; saturation surfaces as
+     ``OutboundError::BackPressure(T)`` (``REQ_0323``).
+   * ``InboundBridge<T>`` — bounded; saturation drops the
+     message and bumps a running count so the gateway can emit
+     ``HealthEvent::DroppedInbound { count }`` (``REQ_0324``).
+   * ``EthercatHealthMonitor`` — thread-safe wrapper around
+     ``HealthMonitor`` that broadcasts every legal transition
+     over a ``crossbeam_channel``.
+   * ``EthercatGateway`` — owns its tokio runtime
+     (multi-thread, default 1 worker per :need:`ADR_0026`) and
+     joins it on ``Drop`` with a 5-second budget mirroring
+     :need:`ARCH_0013` (``REQ_0321``).
+   * ``EthercatConnector<C: PayloadCodec>`` — implements the
+     framework ``Connector`` trait (``REQ_0310``); ``register_with``
+     currently contributes a no-op interval-triggered item that
+     C5c replaces with the bridge-draining dispatcher.
+   * ``sdo::pdo_sdo_writes`` — pure function producing the
+     ordered SDO write sequence (clear → entries → set-count
+     on indices ``0x1C12`` and ``0x1C13``) that the gateway
+     applies during the PRE-OP → SAFE-OP transition
+     (``REQ_0315``).
+   * ``scheduler::CycleScheduler`` — pure-clock pacing decision
+     with skip-not-catch-up semantics; 10-cycle clock jump
+     produces exactly one fire (``REQ_0317``).
+   * ``wkc::evaluate_wkc`` + ``WkcVerdict::degraded_reason`` —
+     working-counter health policy (``REQ_0319``, ``REQ_0320``).
+
+   **Not yet refined by IMPL_0050 (deferred to C5c).** REQ_0312
+   (single MainDevice per gateway), REQ_0313 (bus reaches OP
+   before traffic), REQ_0325 (Linux raw socket / CAP_NET_RAW).
+   All three require the ``ethercrab`` integration; they remain
+   ``open`` until C5c.
+
+   **Tests.** 41 cases pass: TEST_0201 (routing round-trip),
+   TEST_0204 + TEST_0206 (options builder), TEST_0205-partial
+   (SDO write sequence shape), TEST_0207 (cycle scheduler
+   skip-not-catch-up), TEST_0208 (DC opt-in flag), TEST_0209 +
+   TEST_0210 (WKC policy), TEST_0211-partial (gateway tokio
+   runtime ownership and clean drop), TEST_0212-0214 (bridge
+   bounded capacity, BackPressure, DroppedInbound), plus
+   surface-shape checks for TEST_0200 (Connector trait surface,
+   create_writer/reader iceoryx2 round-trip).
 
 ----
 

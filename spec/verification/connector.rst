@@ -83,8 +83,16 @@ Codec tests
    :verifies: REQ_0213
 
    Encoding a value larger than the provided buffer returns
-   ``ConnectorError::Codec`` carrying the codec's static
+   ``ConnectorError::PayloadOverflow { actual, max }`` so the
+   buffer-exhaustion path is distinguishable from genuine serializer
+   faults at the codec layer. Other serializer failures (NaN
+   floats with strict configuration, non-string map keys, etc.)
+   surface as ``ConnectorError::Codec`` carrying the codec's static
    ``format_name()`` and the underlying serializer error chain.
+   Routing buffer-overflow to ``PayloadOverflow`` keeps the codec
+   layer consistent with :need:`REQ_0323` and :need:`TEST_0125` —
+   buffer exhaustion is always the same variant regardless of which
+   layer detects it.
 
 .. test:: Codec decode error propagation
    :id: TEST_0112
