@@ -1,0 +1,42 @@
+[package]
+name         = "sonic-connector-host"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "ConnectorHost / ConnectorGateway builders and the framework's `Connector` trait. Implements BB_0005."
+
+[features]
+default = []
+# Default-off `tracing` feature (REQ_0273). When enabled, the host
+# wires `sonic-executor-tracing` so that `HealthEvent` and
+# `ExecutionMonitor` callbacks forward through the global `tracing`
+# subscriber.
+tracing = ["dep:tracing", "dep:sonic-executor-tracing", "sonic-executor/tracing"]
+
+[dependencies]
+sonic-connector-core          = { path = "../sonic-connector-core" }
+sonic-connector-transport-iox = { path = "../sonic-connector-transport-iox" }
+sonic-executor                = { path = "../sonic-executor" }
+sonic-executor-tracing        = { path = "../sonic-executor-tracing", optional = true }
+iceoryx2                      = { workspace = true }
+crossbeam-channel             = { workspace = true }
+serde                         = { workspace = true, features = ["std"] }
+thiserror                     = { workspace = true }
+tracing                       = { workspace = true, optional = true }
+
+[dev-dependencies]
+sonic-connector-codec = { path = "../sonic-connector-codec" }
+
+[lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
+missing_errors_doc      = "allow"

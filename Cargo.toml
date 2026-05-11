@@ -4,6 +4,7 @@ members = [
     "crates/sonic-bounded-alloc",
     "crates/sonic-connector-codec",
     "crates/sonic-connector-core",
+    "crates/sonic-connector-host",
     "crates/sonic-connector-transport-iox",
     "crates/sonic-executor",
     "crates/sonic-executor-tracing",
