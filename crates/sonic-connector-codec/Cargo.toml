@@ -1,0 +1,36 @@
+[package]
+name         = "sonic-connector-codec"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "PayloadCodec implementations for the sonic-connector framework. Realises BB_0003 (JsonCodec behind default-on `json` feature)."
+
+[features]
+default = ["json"]
+# JsonCodec via serde_json — REQ_0212. Default-on so the typical
+# build pulls a working codec without extra wiring.
+json    = ["dep:serde_json"]
+
+[dependencies]
+sonic-connector-core = { path = "../sonic-connector-core" }
+serde                = { workspace = true, features = ["std"] }
+serde_json           = { workspace = true, optional = true, features = ["std"] }
+
+[dev-dependencies]
+serde      = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+proptest   = { workspace = true }
+
+[lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
+missing_errors_doc      = "allow"
