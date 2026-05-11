@@ -468,6 +468,121 @@ that ``:refines:`` the requirement or feature it answers.
    (they can run plugins; the gateway must live on Linux).
    ❌ Embedded MCU EtherCAT mainboards await a follow-on spec.
 
+.. arch-decision:: ``sonic-connector-ethercat`` module decomposition
+   :id: ADR_0025
+   :status: open
+   :refines: FEAT_0041
+
+   **Context.** :need:`BB_0030` decomposes into plugin (:need:`BB_0031`),
+   gateway (:need:`BB_0032`), PDO mapping (:need:`BB_0033`), and the
+   tokio bridge (:need:`BB_0034`). An implementing crate can either
+   place everything in one ``lib.rs`` (faster initial build, harder to
+   navigate) or mirror the BB decomposition in module structure
+   (one-to-one mapping to specs, slightly more setup).
+
+   **Decision.** ``sonic-connector-ethercat`` mirrors the BB tree as
+   sibling modules: ``plugin``, ``gateway``, ``pdo``, ``bridge``,
+   ``options``, and ``health``. The public surface re-exports
+   ``EthercatConnector`` from ``plugin``, ``EthercatGateway`` from
+   ``gateway``, and ``EthercatConnectorOptions`` /
+   ``EthercatRouting`` from ``options``. Internal modules are
+   ``pub(crate)``.
+
+   **Consequences.** ✅ Each module maps to one BB, so the
+   ``IMPL_`` directive can refine its REQs at module granularity if
+   future work needs finer-grained traceability. ✅ Test files
+   under ``tests/`` align with module names. ❌ One more layer of
+   directory nesting than the smaller framework crates currently
+   adopt; acceptable because the connector crate is the largest.
+
+.. arch-decision:: Tokio runtime owned by ``EthercatGateway``, joined on Drop
+   :id: ADR_0026
+   :status: open
+   :refines: REQ_0321
+
+   **Context.** :need:`REQ_0321` requires the ethercrab TX/RX task to
+   run on a tokio runtime contained inside the connector crate, with
+   no tokio leakage into sonic-executor's ``WaitSet`` thread. Three
+   shapes are possible: (1) a global ``OnceCell<Runtime>`` shared
+   across gateway instances, (2) a runtime owned per-``EthercatGateway``
+   instance, joined on ``Drop``, (3) a runtime spawned externally and
+   handed to the gateway via a builder.
+
+   **Decision.** Each ``EthercatGateway`` instance owns its own
+   ``tokio::runtime::Runtime`` (multi-threaded, defaulting to one
+   worker thread, configurable via
+   ``EthercatConnectorOptions::tokio_worker_threads``). The runtime
+   is constructed in ``EthercatGateway::new`` and shut down via
+   ``Runtime::shutdown_timeout`` in ``Drop`` with a 5-second budget
+   (mirroring REQ_0244's SIGINT clean-exit budget).
+
+   **Consequences.** ✅ Lifecycle is one-to-one with the gateway —
+   no global state, multiple gateways on one host are independent.
+   ✅ Mirrors :need:`ADR_0021` (one MainDevice per gateway).
+   ❌ Spawning two gateways doubles the tokio worker-thread count;
+   operators wanting a shared pool must consolidate gateways or wait
+   for a follow-on spec.
+
+.. arch-decision:: ``EthercatConnectorOptions`` is a typed builder; PDO map declared as ``&'static [SubDeviceMap]``
+   :id: ADR_0027
+   :status: open
+   :refines: REQ_0314, REQ_0315
+
+   **Context.** :need:`REQ_0314` requires the PDO mapping be declared
+   by the application at build time via ``EthercatConnectorOptions``.
+   Two builder shapes are common in Rust: (1) ``Default`` + public
+   mutable fields, (2) a fluent typed builder with ``with_*``
+   methods returning ``Self``. The PDO map itself can be a heap
+   ``Vec<SubDeviceMap>`` or a ``&'static [SubDeviceMap]`` declared
+   in application code.
+
+   **Decision.** ``EthercatConnectorOptions`` is a typed builder
+   (``EthercatConnectorOptions::builder()...with_subdevice(...).build()``)
+   matching :need:`REQ_0270`'s ``ConnectorHost::builder()`` idiom.
+   The PDO map is declared as ``&'static [SubDeviceMap]`` — held by
+   reference so the application can place it in ``.rodata`` and the
+   gateway needs no per-instance heap allocation for it. Individual
+   ``SubDeviceMap`` entries reference ``&'static [PdoEntry]`` for the
+   same reason.
+
+   **Consequences.** ✅ No heap allocation for the PDO map after
+   gateway construction (consistent with sonic-executor's REQ_0060
+   posture for the steady-state hot path). ✅ Builder API parallel to
+   the framework's other connector options. ❌ Applications that need
+   runtime-discovered PDO maps (e.g. EEPROM-parsed) must roll their
+   own ``&'static`` storage or wait for a runtime-PDO follow-on spec.
+
+.. arch-decision:: Verification harness — ethercrab MockMainDevice + env-gated integration tests
+   :id: ADR_0028
+   :status: open
+   :refines: FEAT_0041
+
+   **Context.** :need:`FEAT_0041` ships 16 TEST artefacts
+   (TEST_0220..TEST_0235) verifying REQ_0310..REQ_0325. Six of those
+   tests exercise real bus state transitions, PDO mapping, working
+   counter, and DC bring-up — operations that need a MainDevice.
+   ethercrab offers a ``MockMainDevice`` that simulates SubDevice
+   responses without touching a NIC; full bus integration needs a
+   loopback NIC or real hardware.
+
+   **Decision.** Unit tests in ``crates/sonic-connector-ethercat/src``
+   use ethercrab's ``MockMainDevice`` (covers
+   TEST_0220..TEST_0227, TEST_0231..TEST_0234 — trait-shape, routing,
+   options, bounded-bridge behaviour, health state machine).
+   Integration tests in ``crates/sonic-connector-ethercat/tests`` are
+   gated on the ``ETHERCAT_TEST_NIC`` environment variable; absent the
+   variable they ``skip!`` rather than failing. CI runs the unit
+   tests on every push; the integration suite runs only on the
+   gateway host (Linux + CAP_NET_RAW) as a manual workflow.
+
+   **Consequences.** ✅ Every PR build is green on every developer
+   machine and CI runner — no flaky "missing NIC" failures.
+   ✅ The integration suite still exists in-tree and is one
+   ``ETHERCAT_TEST_NIC=eth0`` away from running. ❌ The integration
+   tests are not on the CI gate; a regression that only surfaces on
+   real hardware will only be caught when the gateway host runs the
+   suite. Documented in this ADR as an accepted risk.
+
 ----
 
 5. Building block view
