@@ -1,0 +1,151 @@
+{
+  "$comment": "Schema validation for sonic-spec. See spec/conf.py for how this is loaded and the sphinx-needs schema docs at https://sphinx-needs.readthedocs.io/en/latest/schema/index.html for the rule grammar. Groups: (1) ID format per type, (2) status enum, (5) status=implemented network contracts. Authored 2026-05-11.",
+
+  "$defs": {
+    "type-feat":           { "properties": { "type": { "const": "feat" } } },
+    "type-req":            { "properties": { "type": { "const": "req" } } },
+    "type-spec":           { "properties": { "type": { "const": "spec" } } },
+    "type-impl":           { "properties": { "type": { "const": "impl" } } },
+    "type-test":           { "properties": { "type": { "const": "test" } } },
+    "type-quality-goal":   { "properties": { "type": { "const": "quality-goal" } } },
+    "type-constraint":     { "properties": { "type": { "const": "constraint" } } },
+    "type-arch-decision":  { "properties": { "type": { "const": "arch-decision" } } },
+    "type-building-block": { "properties": { "type": { "const": "building-block" } } },
+    "type-architecture":   { "properties": { "type": { "const": "architecture" } } },
+    "type-risk":           { "properties": { "type": { "const": "risk" } } },
+    "type-term":           { "properties": { "type": { "const": "term" } } },
+    "status-implemented":  { "properties": { "status": { "const": "implemented" } } }
+  },
+
+  "schemas": [
+    {
+      "id": "id-feat",
+      "message": "feat ID must match ^FEAT_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-feat" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^FEAT_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-req",
+      "message": "req ID must match ^REQ_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-req" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^REQ_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-spec",
+      "message": "spec ID must match ^SPEC_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-spec" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^SPEC_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-impl",
+      "message": "impl ID must match ^IMPL_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-impl" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^IMPL_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-test",
+      "message": "test ID must match ^TEST_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-test" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^TEST_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-quality-goal",
+      "message": "quality-goal ID must match ^QG_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-quality-goal" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^QG_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-constraint",
+      "message": "constraint ID must match ^CON_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-constraint" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^CON_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-arch-decision",
+      "message": "arch-decision ID must match ^ADR_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-arch-decision" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^ADR_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-building-block",
+      "message": "building-block ID must match ^BB_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-building-block" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^BB_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-architecture",
+      "message": "architecture ID must match ^ARCH_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-architecture" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^ARCH_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-risk",
+      "message": "risk ID must match ^RISK_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-risk" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^RISK_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-term",
+      "message": "term (glossary) ID must match ^GLOSS_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-term" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^GLOSS_\\d{4}$" } }, "required": ["id"] } }
+    },
+
+    {
+      "id": "status-enum",
+      "message": "status must be one of: open, draft, review, approved, implemented, rejected",
+      "validate": {
+        "local": {
+          "properties": {
+            "status": { "enum": ["open", "draft", "review", "approved", "implemented", "rejected"] }
+          }
+        }
+      }
+    },
+
+    {
+      "id": "req-implemented-has-impl-or-bb",
+      "message": "req with status=implemented must :links: to at least one impl or building-block (audit trail to the realising artefact)",
+      "select": {
+        "allOf": [
+          { "$ref": "#/$defs/type-req" },
+          { "$ref": "#/$defs/status-implemented" }
+        ]
+      },
+      "validate": {
+        "network": {
+          "links": {
+            "contains": {
+              "local": {
+                "properties": { "type": { "enum": ["impl", "building-block"] } }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "req-implemented-has-test",
+      "message": "req with status=implemented must :links: to at least one test (audit trail to the verifying case)",
+      "select": {
+        "allOf": [
+          { "$ref": "#/$defs/type-req" },
+          { "$ref": "#/$defs/status-implemented" }
+        ]
+      },
+      "validate": {
+        "network": {
+          "links": {
+            "contains": {
+              "local": {
+                "properties": { "type": { "const": "test" } }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ]
+}
