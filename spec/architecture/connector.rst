@@ -604,6 +604,111 @@ that ``:refines:`` the requirement or feature it answers.
    integration surface is stable enough for the abstraction not to
    churn.
 
+.. arch-decision:: Zenoh queries live on a concrete handle type, not the Connector trait
+   :id: ADR_0040
+   :status: open
+   :refines: FEAT_0044
+
+   **Context.** The framework explicitly rejected protocol-portable
+   channels (:need:`REQ_0294`) and framework-level request/response
+   matching (:need:`REQ_0290`). Three options for surfacing Zenoh
+   queries existed: (a) concrete methods on ``ZenohConnector`` only;
+   (b) extend the ``Connector`` trait with default-noop query methods;
+   (c) re-use pub/sub plus app-level correlation.
+
+   **Decision.** Option (a). ``ZenohConnector::create_querier`` and
+   ``ZenohConnector::create_queryable`` are concrete methods that
+   return Zenoh-specific handle types (``ZenohQuerier``,
+   ``ZenohQueryable``). The shared ``Connector`` trait remains
+   unchanged.
+
+   **Consequences.** ✅ Honors :need:`REQ_0290` / :need:`REQ_0294`. ✅
+   MQTT and EtherCAT connectors are not forced to invent
+   no-op query plumbing. ❌ Plugin code wanting queries depends on
+   the concrete ``ZenohConnector`` type, not the abstract trait —
+   but that is exactly the framework's existing posture for
+   protocol-specific affordances (:need:`REQ_0224`).
+
+.. arch-decision:: Stack-internal reconnect for Zenoh — no ReconnectPolicy
+   :id: ADR_0041
+   :status: open
+   :refines: FEAT_0045
+
+   **Context.** Zenoh's own session machinery handles scout and
+   reconnect (peer mode) and reconnect-to-router (client mode). The
+   framework provides :need:`REQ_0232` ``ReconnectPolicy`` and a
+   default ``ExponentialBackoff``, but also explicitly allows
+   stack-internal-reconnect connectors to skip it
+   (:need:`REQ_0235`).
+
+   **Decision.** The Zenoh connector follows the
+   stack-internal-reconnect path. ``ReconnectPolicy`` is not used;
+   the gateway observes the Zenoh session's alive/closed state and
+   emits ``HealthEvent`` on every transition. An anti-req
+   :need:`REQ_0441` records the decision in the requirements page.
+
+   **Consequences.** ✅ No duplicate retry policy contending with
+   Zenoh's own. ✅ Health emission stays uniform across all
+   connectors (:need:`REQ_0234`). ❌ If a future user wants
+   ``zenoh::open`` itself retried with backoff on initial config
+   failure, that becomes a follow-on req — current behavior is to
+   return ``Down`` and rely on application-level restart.
+
+.. arch-decision:: One ZenohRouting struct carries pub/sub QoS; query knobs on options
+   :id: ADR_0042
+   :status: open
+   :refines: FEAT_0043
+
+   **Context.** :need:`REQ_0224` already declares that each
+   connector ships a single routing struct (``MqttRouting``,
+   ``EthercatRouting``, ``ZenohRouting``) implementing the
+   ``Routing`` marker. Zenoh has both pub/sub QoS knobs
+   (congestion control, priority, reliability, express) and
+   query-specific knobs (target, consolidation, timeout). Two
+   options: (a) one routing struct carrying pub/sub QoS, with
+   query knobs on ``ZenohConnectorOptions``; (b) two distinct
+   routing structs.
+
+   **Decision.** Option (a). ``ZenohRouting`` carries
+   ``{ key_expr, congestion_control, priority, reliability,
+   express }``. Query-specific knobs (target, consolidation,
+   timeout) live on ``ZenohConnectorOptions`` as session-wide
+   defaults; ``ZenohQuerier`` exposes a builder to override the
+   timeout per-call.
+
+   **Consequences.** ✅ Preserves :need:`REQ_0224`'s single-routing-
+   struct rule. ✅ Mirrors :need:`REQ_0251` (MQTT carries QoS in
+   routing). ❌ Per-channel query target / consolidation overrides
+   require a builder method instead of a routing field — accepted
+   tradeoff for type-system simplicity.
+
+.. arch-decision:: Reply framing uses a Zenoh-private 1-byte payload prefix
+   :id: ADR_0043
+   :status: open
+   :refines: FEAT_0044
+
+   **Context.** Multi-reply Zenoh queries need an end-of-stream
+   signal in addition to data chunks. Two options: (a) allocate
+   one bit of ``ConnectorEnvelope``'s reserved word
+   (:need:`REQ_0200`) — but that turns the reserved word into
+   Zenoh-specific framework metadata; (b) carry a one-byte frame
+   discriminator inside ``envelope.payload[0]`` — Zenoh-private,
+   the framework remains agnostic.
+
+   **Decision.** Option (b). Every envelope on the two reply-side
+   iceoryx2 services (``{name}.reply.in`` / ``{name}.reply.out``)
+   begins ``payload`` with a 1-byte discriminator: ``0x01`` = data
+   chunk (followed by codec-encoded ``R``), ``0x02`` = end of
+   stream (empty body), ``0x03`` = gateway-synthetic timeout
+   (empty body). The framework's reserved word stays untouched.
+
+   **Consequences.** ✅ Framework anti-goal (no inspection of
+   envelope payload, no protocol-portable semantics in the
+   reserved word) preserved. ✅ Future connectors can re-use the
+   pattern without coordinating with the framework. ❌ Plugin-side
+   ``ZenohQuerier::try_recv`` and ``ZenohQueryable::reply`` add a
+   single-byte skip / write step relative to pub/sub channels.
+
 ----
 
 5. Building block view
