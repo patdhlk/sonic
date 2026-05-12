@@ -1,7 +1,7 @@
 Soft-RT PLC runtime heart
 =========================
 
-This page captures the requirements for using `sonic-executor` as the runtime
+This page captures the requirements for using ``sonic-executor`` as the runtime
 heart of a soft-real-time PLC. It follows from the gap analysis between
 typical PLC architecture (Beckhoff TwinCAT, Siemens TIA, B&R Automation
 Studio, Rockwell Logix) and the abstractions sonic-executor provides today.

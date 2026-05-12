@@ -1,16 +1,16 @@
 Overview
 ========
 
-`sonic-executor` is a Rust execution framework on `iceoryx2`_ that turns IPC
+``sonic-executor`` is a Rust execution framework on `iceoryx2`_ that turns IPC
 events, intervals, and request/response activity into deterministic,
 observable schedules of executable items.
 
-This specification frames `sonic-executor` as the **runtime heart of a
+This specification frames ``sonic-executor`` as the **runtime heart of a
 soft-real-time PLC**: a foundation for non-safety industrial automation,
 robotics control loops, machine-monitoring runtimes, and R&D testbeds where
 occasional jitter is acceptable. The framing follows directly from a gap
 analysis (recorded in :doc:`requirements/plc-runtime`) that distinguishes
-the capabilities `sonic-executor` already provides from those that must be
+the capabilities ``sonic-executor`` already provides from those that must be
 added before it can credibly call itself a soft-RT PLC.
 
 What is **out of scope** for the runtime heart:

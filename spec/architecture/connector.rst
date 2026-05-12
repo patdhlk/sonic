@@ -1902,13 +1902,13 @@ spec text that needed amendment during implementation.
      working-counter health policy (``REQ_0319``, ``REQ_0320``).
    * ``driver::BusDriver`` — async trait abstracting the
      bring-up + per-cycle operations the runner needs from a
-     concrete back-end (`REQ_0312` / `REQ_0313` / `REQ_0315`
+     concrete back-end (``REQ_0312`` / ``REQ_0313`` / ``REQ_0315``
      are encoded in the contract; concrete impls cover them).
      C7a extends the trait with callback-shaped
      ``with_subdevice_outputs_mut`` / ``with_subdevice_inputs``
      methods that expose one SubDevice's PDI region; the
-     callback shape keeps ethercrab's internal `PdiWriteGuard`
-     lifetime scoped to the impl (`REQ_0326`, `REQ_0327`).
+     callback shape keeps ethercrab's internal ``PdiWriteGuard``
+     lifetime scoped to the impl (``REQ_0326``, ``REQ_0327``).
    * ``mock::MockBusDriver`` — programmable test fixture: WKC
      sequences, configurable bring-up response, bring-up
      failure injection. C7a extends with per-SubDevice

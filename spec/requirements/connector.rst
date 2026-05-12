@@ -1,7 +1,7 @@
 Connector framework
 ===================
 
-This page captures the requirements for `sonic-connector`: a framework that
+This page captures the requirements for ``sonic-connector``: a framework that
 connects sonic-executor applications to external protocols (MQTT, OPC UA,
 gRPC, fieldbus) through a controlled boundary, so messy network code lives
 outside the application's deterministic core.

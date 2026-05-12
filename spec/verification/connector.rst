@@ -539,11 +539,11 @@ exercised without hardware. Bench tests run only when invoked as
    :status: open
    :verifies: REQ_0326, REQ_0328
 
-   With a [`MockBusDriver`] configured for a single SubDevice at
+   With a ``MockBusDriver`` configured for a single SubDevice at
    address ``0x0001`` with an outputs buffer of N bytes, a plugin
    that constructs an ``EthercatConnector`` and calls
-   ``create_writer`` for a [`ChannelDescriptor`] whose
-   [`EthercatRouting`] selects bits ``[bit_offset, bit_offset +
+   ``create_writer`` for a ``ChannelDescriptor`` whose
+   ``EthercatRouting`` selects bits ``[bit_offset, bit_offset +
    bit_length)`` of that SubDevice's outputs, then invokes
    ``ChannelWriter::send(value)``: after the next cycle, the
    mock's outputs buffer at the routing's bit slice shall equal
@@ -555,7 +555,7 @@ exercised without hardware. Bench tests run only when invoked as
    :status: open
    :verifies: REQ_0327, REQ_0328
 
-   With a [`MockBusDriver`] preloaded with inputs bytes at a known
+   With a ``MockBusDriver`` preloaded with inputs bytes at a known
    bit slice via ``with_subdevice_inputs``, a plugin that
    constructs an ``EthercatConnector`` and calls ``create_reader``
    for a routing pointing at that slice: after one cycle,
@@ -568,7 +568,7 @@ exercised without hardware. Bench tests run only when invoked as
    :status: open
    :verifies: REQ_0326, REQ_0327
 
-   Compose [`TEST_0220`] and [`TEST_0221`] via a `MockBusDriver`
+   Compose :need:`TEST_0220` and :need:`TEST_0221` via a ``MockBusDriver``
    variant that, on every cycle, copies the SubDevice's outputs
    buffer over to its inputs buffer (synthetic loopback). The
    plugin registers paired Rx and Tx channels pointing at the
