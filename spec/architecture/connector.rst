@@ -1986,6 +1986,143 @@ spec text that needed amendment during implementation.
    trait surface, ``create_writer`` / ``create_reader``
    registration semantics).
 
+.. impl:: sonic-connector-zenoh crate (planned)
+   :id: IMPL_0060
+   :status: draft
+   :implements: BB_0040
+   :refines: REQ_0400, REQ_0401, REQ_0402, REQ_0403, REQ_0404, REQ_0405, REQ_0406, REQ_0407, REQ_0408, REQ_0420, REQ_0421, REQ_0422, REQ_0423, REQ_0424, REQ_0425, REQ_0426, REQ_0427, REQ_0428, REQ_0440, REQ_0442, REQ_0443, REQ_0444, REQ_0445, REQ_0446
+
+   **Crate.** ``crates/sonic-connector-zenoh`` (planned; not yet
+   scaffolded). Default deps: ``sonic-connector-core``,
+   ``sonic-connector-transport-iox``, ``sonic-connector-host``,
+   ``sonic-executor``, ``crossbeam-channel``, ``tokio`` (``rt`` +
+   ``rt-multi-thread`` + ``macros`` + ``sync``). Optional
+   ``zenoh`` dep behind the default-off ``zenoh-integration``
+   cargo feature (:need:`REQ_0444`).
+
+   **Status.** Planned surface only — the crate has not been
+   scaffolded. This directive locks in the public API that the
+   forthcoming implementation will be measured against. Once the
+   crate exists, its surface, dependencies, and test coverage are
+   reconciled against this directive; divergences are recorded as
+   amendments. Status flips from ``draft`` to ``open`` after the
+   first complete in-tree implementation lands and the public
+   surface matches the bulleted list below.
+
+   **Surface.**
+
+   * ``ZenohRouting`` — typed routing carrying the Zenoh key
+     expression and pub/sub QoS knobs (``key_expr``,
+     ``congestion_control``, ``priority``, ``reliability``,
+     ``express``). Implements ``Routing``. ``key_expr`` is
+     validated on the plugin side at ``create_writer`` /
+     ``create_reader`` / ``create_querier`` /
+     ``create_queryable`` entry; invalid expressions surface as
+     ``ConnectorError::Configuration`` (``REQ_0401``,
+     :need:`ADR_0042`).
+   * ``ZenohConnectorOptions`` typed builder — ``mode``
+     (``SessionMode::{Peer, Client, Router}``, default ``Peer``;
+     ``REQ_0440``), ``connect`` / ``listen`` locator lists
+     surfaced verbatim to ``zenoh::Config`` (``REQ_0443``),
+     ``query_target`` / ``query_consolidation`` / ``query_timeout``
+     defaults for queriers (``REQ_0425``), bounded bridge
+     capacities (``REQ_0404``), optional ``min_peers`` knob
+     governing ``Degraded`` health transitions.
+   * ``OutboundBridge<T>`` — bounded; saturation surfaces as
+     ``ConnectorError::BackPressure`` and flips health to
+     ``Degraded`` (``REQ_0405``).
+   * ``InboundBridge<T>`` — bounded; saturation drops the offending
+     Zenoh sample or reply chunk and bumps a running count so the
+     gateway emits ``HealthEvent::DroppedInbound { count }``
+     (``REQ_0406``, ``REQ_0428``).
+   * ``ZenohSessionLike`` — trait abstracting over ``zenoh::Session``
+     vs ``MockZenohSession`` so the gateway is compile-time
+     monomorphised against either back-end. Methods:
+     ``declare_publisher`` / ``declare_subscriber`` / ``get`` /
+     ``declare_queryable`` / ``session_state``.
+   * ``MockZenohSession`` — in-process pub/sub + query loopback
+     implementing ``ZenohSessionLike``; ships in the default
+     build, not gated by ``zenoh-integration`` (``REQ_0445``).
+     Programmable session-state sequences for health-state tests.
+   * ``RealZenohSession`` — thin wrapper over ``zenoh::Session``
+     created via ``zenoh::open(config)``; lives behind the
+     ``zenoh-integration`` cargo feature.
+   * ``ZenohGateway<S: ZenohSessionLike, C: PayloadCodec>`` —
+     owns one session, the per-channel routing registry, the
+     bounded bridges, the tokio runtime hosting Zenoh callbacks
+     (``REQ_0403``), and the ``correlation_id → zenoh::Query``
+     map for in-flight queryable reply streams (``REQ_0426``).
+     Observes session-alive ↔ session-closed transitions from
+     ``S`` and emits one ``HealthEvent`` per transition
+     (``REQ_0442``). No ``ReconnectPolicy``
+     (:need:`ADR_0041` / :need:`REQ_0441`).
+   * ``ZenohConnector<C: PayloadCodec>`` — implements the
+     framework ``Connector`` trait with ``type Routing =
+     ZenohRouting`` and ``type Codec = C`` (``REQ_0400``).
+     ``create_writer`` / ``create_reader`` open the plugin-side
+     iceoryx2 services named ``"{descriptor.name()}.out"`` /
+     ``".in"`` (``REQ_0407``, ``REQ_0408``). Beyond the trait,
+     ``ZenohConnector`` exposes two **concrete** non-trait
+     methods — ``create_querier<Q, R, …>`` and
+     ``create_queryable<Q, R, …>`` — returning Zenoh-specific
+     handle types (``REQ_0420``, :need:`ADR_0040`).
+   * ``ZenohQuerier<Q, R, C, N>`` — non-trait query-initiation
+     handle. ``send(q)`` mints a fresh ``QueryId``, encodes ``Q``
+     via the connector's codec, stamps the ``QueryId`` into the
+     envelope's ``correlation_id`` (``REQ_0421``), and publishes
+     on ``"{name}.query.out"``; returns the ``QueryId`` for
+     reply demultiplexing. ``try_recv`` drains
+     ``"{name}.reply.in"``, decoding the 1-byte frame
+     discriminator (``0x01`` data, ``0x02`` end-of-stream,
+     ``0x03`` gateway-synthetic timeout per :need:`ADR_0043` /
+     ``REQ_0424``). Per-call ``send_with_timeout`` overrides
+     the session-wide default (``REQ_0425``).
+   * ``ZenohQueryable<Q, R, C, N>`` — non-trait query-handling
+     handle. ``try_recv`` surfaces ``(QueryId, Q)`` decoded from
+     ``"{name}.query.in"``. ``reply(id, r)`` encodes ``R``
+     into ``envelope.payload[1..]`` with byte ``[0] = 0x01``
+     and publishes on ``"{name}.reply.out}"``; callable zero
+     or more times per ``QueryId`` (``REQ_0423``, ``REQ_0427``).
+     ``terminate(id)`` publishes a ``0x02`` envelope; the
+     gateway drops the corresponding ``zenoh::Query`` handle,
+     finalising the upstream reply stream (``REQ_0426``).
+     Matching of ``QueryId`` to ``zenoh::Query`` lives inside
+     this type and the gateway — never the framework
+     (preserves :need:`REQ_0290`, ``REQ_0422``).
+   * Reply framing — every envelope on ``"{name}.reply.out"`` /
+     ``"{name}.reply.in"`` carries a 1-byte Zenoh-private
+     discriminator at ``payload[0]``: ``0x01`` data chunk
+     (followed by codec-encoded ``R``), ``0x02`` end of stream,
+     ``0x03`` gateway-synthetic timeout terminator. The
+     framework's ``ConnectorEnvelope`` reserved word stays
+     untouched (``REQ_0424``, :need:`ADR_0043`).
+   * Codec is a generic parameter, compile-time-monomorphised
+     (re-affirms :need:`REQ_0211`); ``JsonCodec`` is the default
+     wiring in examples (``REQ_0402``, re-affirms
+     :need:`REQ_0212`). Gateway-side dispatching forwards raw
+     bytes only — codecs run plugin-side on both pub/sub and
+     query paths (``REQ_0408``, ``REQ_0427``).
+   * Cross-platform — Linux, macOS, and Windows are supported
+     host operating systems for both plugin and gateway
+     (``REQ_0446``); no Linux-specific socket capability is
+     required (contrast :need:`REQ_0325` for EtherCAT).
+
+   **Tests.** The corpus authored alongside this directive in
+   :doc:`../verification/connector` includes TEST_0300
+   (``ZenohRouting`` validation), TEST_0301 (``Connector`` trait
+   surface), TEST_0302 (pub/sub end-to-end via
+   ``MockZenohSession``), TEST_0303 (query round-trip via
+   ``MockZenohSession``), TEST_0304 (codec failure paths),
+   TEST_0305 / TEST_0306 (bridge saturation), TEST_0307
+   (query-timeout terminator), TEST_0308 (health state machine),
+   TEST_0309 (anti-req — no ``ReconnectPolicy``), TEST_0310
+   (cargo-feature dep gating), TEST_0311 (cross-platform build
+   matrix), TEST_0314 (tokio sidecar containment). Layer-2 /
+   Layer-3 cases ``TEST_0312`` (two-peer real session) and
+   ``TEST_0313`` (client-mode router smoke) remain
+   ``:status: draft`` until the ``zenoh-integration`` and
+   ``ZENOH_TEST_ROUTER`` CI jobs land.
+
 ----
 
 Cross-cutting traceability
