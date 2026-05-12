@@ -15,6 +15,7 @@ pub mod bridge;
 pub mod health;
 pub mod mock;
 pub mod options;
+pub mod registry;
 pub mod routing;
 pub mod session;
 
