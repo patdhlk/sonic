@@ -21,10 +21,10 @@ pub mod session;
 // pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 // pub use health::ZenohHealthMonitor;
 // pub use mock::MockZenohSession;
-// pub use options::{
-//     Consolidation, Locator, QueryTarget, SessionMode, ZenohConnectorOptions,
-//     ZenohConnectorOptionsBuilder,
-// };
+pub use options::{
+    Consolidation, Locator, QueryTarget, SessionMode, ZenohConnectorOptions,
+    ZenohConnectorOptionsBuilder,
+};
 pub use routing::{
     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
 };
