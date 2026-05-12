@@ -18,7 +18,7 @@ pub mod options;
 pub mod routing;
 pub mod session;
 
-// pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
+pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 // pub use health::ZenohHealthMonitor;
 // pub use mock::MockZenohSession;
 pub use options::{
