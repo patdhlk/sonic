@@ -7,6 +7,7 @@ members = [
     "crates/sonic-connector-ethercat",
     "crates/sonic-connector-host",
     "crates/sonic-connector-transport-iox",
+    "crates/sonic-connector-zenoh",
     "crates/sonic-executor",
     "crates/sonic-executor-tracing",
     "crates/sonic-replay",
