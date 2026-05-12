@@ -83,6 +83,8 @@ pub struct ZenohConnectorOptions {
     pub outbound_bridge_capacity: usize,
     /// Channel capacity for the inbound bridge.
     pub inbound_bridge_capacity: usize,
+    /// Number of tokio worker threads for the runtime (clamped to at least 1).
+    pub tokio_worker_threads: usize,
     /// Minimum number of peers required before the session is considered
     /// ready. `None` means no minimum.
     pub min_peers: Option<usize>,
@@ -107,6 +109,7 @@ pub struct ZenohConnectorOptionsBuilder {
     query_timeout: Duration,
     outbound_bridge_capacity: usize,
     inbound_bridge_capacity: usize,
+    tokio_worker_threads: usize,
     min_peers: Option<usize>,
 }
 
@@ -121,6 +124,7 @@ impl Default for ZenohConnectorOptionsBuilder {
             query_timeout: Duration::from_secs(10),
             outbound_bridge_capacity: 64,
             inbound_bridge_capacity: 64,
+            tokio_worker_threads: 1,
             min_peers: None,
         }
     }
@@ -183,6 +187,13 @@ impl ZenohConnectorOptionsBuilder {
         self
     }
 
+    /// Set the number of tokio worker threads (clamped to at least 1).
+    #[must_use]
+    pub const fn tokio_worker_threads(mut self, n: usize) -> Self {
+        self.tokio_worker_threads = if n == 0 { 1 } else { n };
+        self
+    }
+
     /// Require at least `n` peers before the session is considered ready.
     #[must_use]
     pub const fn min_peers(mut self, n: usize) -> Self {
@@ -202,6 +213,7 @@ impl ZenohConnectorOptionsBuilder {
             query_timeout: self.query_timeout,
             outbound_bridge_capacity: self.outbound_bridge_capacity,
             inbound_bridge_capacity: self.inbound_bridge_capacity,
+            tokio_worker_threads: self.tokio_worker_threads,
             min_peers: self.min_peers,
         }
     }

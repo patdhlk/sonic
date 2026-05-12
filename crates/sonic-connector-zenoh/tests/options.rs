@@ -81,3 +81,25 @@ fn builder_sets_min_peers() {
     let opts = ZenohConnectorOptions::builder().min_peers(2).build();
     assert_eq!(opts.min_peers, Some(2));
 }
+
+#[test]
+fn default_tokio_worker_threads_is_one() {
+    let opts = ZenohConnectorOptions::builder().build();
+    assert_eq!(opts.tokio_worker_threads, 1);
+}
+
+#[test]
+fn builder_overrides_tokio_worker_threads() {
+    let opts = ZenohConnectorOptions::builder()
+        .tokio_worker_threads(4)
+        .build();
+    assert_eq!(opts.tokio_worker_threads, 4);
+}
+
+#[test]
+fn tokio_worker_threads_zero_clamps_to_one() {
+    let opts = ZenohConnectorOptions::builder()
+        .tokio_worker_threads(0)
+        .build();
+    assert_eq!(opts.tokio_worker_threads, 1);
+}
