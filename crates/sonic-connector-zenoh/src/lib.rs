@@ -12,6 +12,7 @@
 //! for the design context.
 
 pub mod bridge;
+pub mod connector;
 pub mod dispatcher;
 pub mod gateway;
 pub mod health;
@@ -22,6 +23,7 @@ pub mod routing;
 pub mod session;
 
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
+pub use connector::{ZenohConnector, ZenohState};
 pub use health::ZenohHealthMonitor;
 pub use mock::MockZenohSession;
 pub use options::{
