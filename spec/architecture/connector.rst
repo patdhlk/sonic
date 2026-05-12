@@ -842,6 +842,79 @@ two crates that carry the most logic.
    inbound saturation emits ``HealthEvent::DroppedInbound { count }``
    and drops the inbound process image for the affected cycle.
 
+.. building-block:: sonic-connector-zenoh
+   :id: BB_0040
+   :status: open
+   :implements: REQ_0400, REQ_0420, REQ_0440, REQ_0444
+
+   Zenoh plugin (``ZenohConnector<C>`` implementing ``Connector``)
+   and gateway (``ZenohGateway`` exposing executable items). Hosts
+   the tokio sidecar driving ``zenoh::Session`` and the bridge
+   between sonic-executor and tokio. Depends on
+   ``sonic-connector-core``, ``sonic-connector-transport-iox``,
+   ``sonic-connector-codec``, ``sonic-executor``, and (behind the
+   ``zenoh-integration`` feature) ``zenoh``.
+
+.. building-block:: ZenohConnector (sub-block of BB_0040, plugin side)
+   :id: BB_0041
+   :status: open
+   :implements: REQ_0400, REQ_0401, REQ_0420
+
+   Plugin-side ``ZenohConnector<C: PayloadCodec>``. Implements
+   ``Connector`` with ``type Routing = ZenohRouting`` and adds
+   concrete non-trait methods ``create_querier`` /
+   ``create_queryable``. Owns no I/O — produces ``ChannelWriter`` /
+   ``ChannelReader`` / ``ZenohQuerier`` / ``ZenohQueryable`` handles
+   whose ``ZenohRouting`` identifies a Zenoh key expression and the
+   pub/sub QoS knobs. Acts as a compile-time-checked façade over
+   the gateway's SHM services.
+
+.. building-block:: ZenohGateway (sub-block of BB_0040, gateway side)
+   :id: BB_0042
+   :status: open
+   :implements: REQ_0403, REQ_0426, REQ_0440, REQ_0442
+
+   Gateway-side executable item that owns one ``zenoh::Session``
+   created via ``zenoh::open(config)`` (or a ``MockZenohSession``
+   when ``zenoh-integration`` is off — both implement the
+   ``ZenohSessionLike`` trait). Maintains a per-channel routing
+   registry mapping each open ``ChannelDescriptor`` to its
+   declared Zenoh primitive (publisher / subscriber / queryable),
+   and a ``correlation_id → zenoh::Query`` map for in-flight
+   queryable reply streams. Translates session-alive ↔
+   session-closed transitions into ``HealthEvent``s without
+   using ``ReconnectPolicy``.
+
+.. building-block:: Zenoh query handles (sub-block of BB_0041)
+   :id: BB_0043
+   :status: open
+   :implements: REQ_0420, REQ_0421, REQ_0422, REQ_0423, REQ_0424
+
+   ``ZenohQuerier<Q, R, C, N>`` and ``ZenohQueryable<Q, R, C, N>``.
+   The non-trait query handle types. ``ZenohQuerier::send`` mints
+   a ``QueryId``, encodes ``Q`` via the connector's codec, and
+   publishes on the channel's ``{name}.query.out`` iceoryx2
+   service; ``try_recv`` drains ``{name}.reply.in`` and decodes
+   the 1-byte frame discriminator (0x01=data, 0x02=EoS,
+   0x03=timeout) plus the codec-encoded ``R`` chunk.
+   ``ZenohQueryable::try_recv`` surfaces ``(QueryId, Q)``; ``reply``
+   stamps the ``QueryId`` back onto a reply envelope and publishes
+   on ``{name}.reply.out``; ``terminate(id)`` publishes a 0x02
+   envelope finalising the upstream ``zenoh::Query``.
+
+.. building-block:: Tokio bridge for zenoh (sub-block of BB_0042)
+   :id: BB_0044
+   :status: open
+   :implements: REQ_0403, REQ_0404, REQ_0405, REQ_0406
+
+   Two bounded channel pairs that translate between sonic-executor's
+   WaitSet thread and the tokio runtime owning ``zenoh::Session``.
+   Outbound saturation surfaces as ``ConnectorError::BackPressure``
+   plus ``ConnectorHealth::Degraded``; inbound saturation emits
+   ``HealthEvent::DroppedInbound { count }`` and drops the
+   offending sample or reply chunk. Same shape as :need:`BB_0034`
+   (EtherCAT) and :need:`BB_0022` (MQTT).
+
 ----
 
 6. Runtime view
