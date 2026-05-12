@@ -7,7 +7,7 @@
 //! `Connector` trait impl (Z2), query handles (Z3), and the real
 //! `zenoh::Session` wrapper (Z4).
 //!
-//! See `spec/architecture/connector.rst` for the full IMPL_0060
+//! See `spec/architecture/connector.rst` for the full `IMPL_0060`
 //! directive and `docs/superpowers/specs/2026-05-12-zenoh-connector-design.md`
 //! for the design context.
 
@@ -25,7 +25,7 @@ pub mod session;
 //     Consolidation, Locator, QueryTarget, SessionMode, ZenohConnectorOptions,
 //     ZenohConnectorOptionsBuilder,
 // };
-// pub use routing::{
-//     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
-// };
+pub use routing::{
+    CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
+};
 // pub use session::{FrameKind, ReplyFrame, SessionState, ZenohSessionLike};
