@@ -28,4 +28,4 @@ pub use options::{
 pub use routing::{
     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
 };
-// pub use session::{FrameKind, ReplyFrame, SessionState, ZenohSessionLike};
+pub use session::{FrameKind, ReplyFrame, SessionState, ZenohSessionLike};
