@@ -668,7 +668,7 @@ two crates that carry the most logic.
 .. architecture:: Level-1 building block decomposition
    :id: ARCH_0002
    :status: open
-   :refines: BB_0001, BB_0002, BB_0003, BB_0004, BB_0005, BB_0030
+   :refines: BB_0001, BB_0002, BB_0003, BB_0004, BB_0005, BB_0030, BB_0040
 
    Crate-level building blocks and their dependency graph. All edges
    point from depender to dependee. The graph is acyclic; the host is
@@ -690,6 +690,7 @@ two crates that carry the most logic.
           CD[sonic-connector-codec<br/>BB_0003]
           MQ[sonic-connector-mqtt<br/>BB_0004]
           EC[sonic-connector-ethercat<br/>BB_0030]
+          ZE[sonic-connector-zenoh<br/>BB_0040]
           HO[sonic-connector-host<br/>BB_0005]
         end
         CO --> TX
@@ -708,6 +709,11 @@ two crates that carry the most logic.
         CD --> HO
         MQ --> HO
         EC --> HO
+        CO --> ZE
+        TX --> ZE
+        CD --> ZE
+        EX --> ZE
+        ZE --> HO
         TR -.optional adapter.-> HO
 
 .. building-block:: ConnectorEnvelope (sub-block of BB_0002)
