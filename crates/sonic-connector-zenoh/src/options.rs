@@ -88,6 +88,9 @@ pub struct ZenohConnectorOptions {
     /// Minimum number of peers required before the session is considered
     /// ready. `None` means no minimum.
     pub min_peers: Option<usize>,
+    /// How long the dispatcher loop sleeps between drain iterations.
+    /// Default: 1 ms.
+    pub dispatcher_tick: Duration,
 }
 
 impl ZenohConnectorOptions {
@@ -111,6 +114,7 @@ pub struct ZenohConnectorOptionsBuilder {
     inbound_bridge_capacity: usize,
     tokio_worker_threads: usize,
     min_peers: Option<usize>,
+    dispatcher_tick: Duration,
 }
 
 impl Default for ZenohConnectorOptionsBuilder {
@@ -126,6 +130,7 @@ impl Default for ZenohConnectorOptionsBuilder {
             inbound_bridge_capacity: 64,
             tokio_worker_threads: 1,
             min_peers: None,
+            dispatcher_tick: Duration::from_millis(1),
         }
     }
 }
@@ -201,6 +206,13 @@ impl ZenohConnectorOptionsBuilder {
         self
     }
 
+    /// Override the dispatcher loop's sleep interval between drain iterations.
+    #[must_use]
+    pub const fn dispatcher_tick(mut self, d: Duration) -> Self {
+        self.dispatcher_tick = d;
+        self
+    }
+
     /// Consume the builder and return the final [`ZenohConnectorOptions`].
     #[must_use]
     pub fn build(self) -> ZenohConnectorOptions {
@@ -215,6 +227,7 @@ impl ZenohConnectorOptionsBuilder {
             inbound_bridge_capacity: self.inbound_bridge_capacity,
             tokio_worker_threads: self.tokio_worker_threads,
             min_peers: self.min_peers,
+            dispatcher_tick: self.dispatcher_tick,
         }
     }
 }

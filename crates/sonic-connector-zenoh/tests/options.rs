@@ -103,3 +103,17 @@ fn tokio_worker_threads_zero_clamps_to_one() {
         .build();
     assert_eq!(opts.tokio_worker_threads, 1);
 }
+
+#[test]
+fn default_dispatcher_tick_is_one_millisecond() {
+    let opts = ZenohConnectorOptions::builder().build();
+    assert_eq!(opts.dispatcher_tick, std::time::Duration::from_millis(1));
+}
+
+#[test]
+fn builder_overrides_dispatcher_tick() {
+    let opts = ZenohConnectorOptions::builder()
+        .dispatcher_tick(std::time::Duration::from_millis(5))
+        .build();
+    assert_eq!(opts.dispatcher_tick, std::time::Duration::from_millis(5));
+}
