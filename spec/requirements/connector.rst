@@ -1204,12 +1204,12 @@ directives) are emitted in :doc:`../verification/connector`.
 
 .. needtable::
    :types: feat
-   :filter: "FEAT_003" in id or id == "FEAT_0041"
+   :filter: "FEAT_003" in id or id in ("FEAT_0041", "FEAT_0042", "FEAT_0043", "FEAT_0044", "FEAT_0045")
    :columns: id, title, status, satisfies
    :show_filters:
 
 .. needtable::
    :types: req
-   :filter: "REQ_02" in id or ("REQ_03" in id and id >= "REQ_0310")
+   :filter: "REQ_02" in id or ("REQ_03" in id and id >= "REQ_0310") or "REQ_04" in id
    :columns: id, title, status, satisfies
    :show_filters:
