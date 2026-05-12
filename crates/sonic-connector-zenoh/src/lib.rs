@@ -20,7 +20,7 @@ pub mod session;
 
 pub use bridge::{InboundBridge, InboundOutcome, OutboundBridge, OutboundError};
 // pub use health::ZenohHealthMonitor;
-// pub use mock::MockZenohSession;
+pub use mock::MockZenohSession;
 pub use options::{
     Consolidation, Locator, QueryTarget, SessionMode, ZenohConnectorOptions,
     ZenohConnectorOptionsBuilder,
@@ -28,4 +28,7 @@ pub use options::{
 pub use routing::{
     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
 };
-pub use session::{FrameKind, ReplyFrame, SessionState, ZenohSessionLike};
+pub use session::{
+    DoneCallback, FrameKind, PayloadSink, QuerySink, ReplyFrame, SessionError, SessionState,
+    ZenohSessionLike,
+};
