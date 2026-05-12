@@ -664,7 +664,7 @@ land.
 .. test:: Pub/sub end-to-end against MockZenohSession
    :id: TEST_0302
    :status: open
-   :verifies: REQ_0407, REQ_0408, REQ_0445
+   :verifies: REQ_0402, REQ_0407, REQ_0408, REQ_0445
 
    Drive a ``ChannelWriter::send(value)`` through
    ``MockZenohSession`` and observe ``ChannelReader::try_recv``
@@ -676,7 +676,7 @@ land.
 .. test:: Query round-trip against MockZenohSession
    :id: TEST_0303
    :status: open
-   :verifies: REQ_0420, REQ_0421, REQ_0422, REQ_0423, REQ_0424, REQ_0427
+   :verifies: REQ_0420, REQ_0421, REQ_0422, REQ_0423, REQ_0424, REQ_0426, REQ_0427
 
    End-to-end query test: plugin A calls
    ``ZenohQuerier::send(q)``; plugin B's ``ZenohQueryable::try_recv``
@@ -702,7 +702,7 @@ land.
 .. test:: Outbound bridge saturation surfaces as BackPressure
    :id: TEST_0305
    :status: open
-   :verifies: REQ_0405
+   :verifies: REQ_0404, REQ_0405
 
    With ``outbound_bridge_capacity = 1`` and a deliberately stalled
    ``MockZenohSession``, the second ``ChannelWriter::send`` (and
@@ -797,6 +797,21 @@ land.
    reachable ``zenohd``, open a client-mode session and assert
    ``ConnectorHealth`` reaches ``Up``. Status remains
    ``deferred`` until the client-mode CI job lands.
+
+.. test:: Tokio sidecar contained inside sonic-connector-zenoh
+   :id: TEST_0314
+   :status: open
+   :verifies: REQ_0403
+
+   Static check that the ``zenoh::Session`` and any tokio runtime
+   handle live entirely inside the ``sonic-connector-zenoh`` crate.
+   No public type exported by ``sonic-connector-zenoh`` shall name a
+   ``tokio::*`` type in its signature (compile-time API surface scan).
+   At runtime, an executor unit test instantiates a ``ZenohConnector``
+   and asserts that the WaitSet thread does not contain any tokio
+   task handle attributable to the gateway sidecar (mirrors the
+   posture verified by :need:`TEST_0211` for the EtherCAT crate
+   under :need:`REQ_0321`).
 
 ----
 
