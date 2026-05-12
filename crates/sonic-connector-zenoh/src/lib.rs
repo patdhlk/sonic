@@ -12,6 +12,7 @@
 //! for the design context.
 
 pub mod bridge;
+pub mod gateway;
 pub mod health;
 pub mod mock;
 pub mod options;
