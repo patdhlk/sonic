@@ -760,6 +760,134 @@ Host wiring
    forwards ``HealthEvent`` and ``ExecutionMonitor`` callbacks through
    the global ``tracing`` subscriber.
 
+Zenoh reference connector
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. feat:: Zenoh reference connector
+   :id: FEAT_0042
+   :status: open
+   :satisfies: FEAT_0030
+
+   A third concrete connector instantiating the framework's contracts:
+   ``zenoh``-backed plugin and gateway with bidirectional pub/sub and
+   queries. The session topology is configurable between peer and
+   client modes; reconnect is delegated to the Zenoh session itself
+   (stack-internal posture mirroring :need:`REQ_0235`). Queries are
+   exposed via concrete methods on ``ZenohConnector`` only — the
+   shared ``Connector`` trait is not modified. The gateway owns one
+   ``zenoh::Session`` and runs Zenoh's async callbacks on a tokio
+   sidecar contained inside ``sonic-connector-zenoh``. Linux, macOS,
+   and Windows are supported host operating systems.
+
+.. feat:: Zenoh pub/sub
+   :id: FEAT_0043
+   :status: open
+   :satisfies: FEAT_0042
+
+   The pub/sub half of the Zenoh connector. ``ChannelWriter`` and
+   ``ChannelReader`` carry codec-encoded values through iceoryx2 SHM
+   services to / from Zenoh publishers and subscribers running on
+   the gateway's tokio sidecar. Bridges between sonic-executor and
+   tokio are bounded; saturation surfaces as ``BackPressure`` on
+   outbound and ``DroppedInbound`` health events on inbound.
+
+.. req:: ZenohConnector implements Connector
+   :id: REQ_0400
+   :status: open
+   :satisfies: FEAT_0043
+
+   The connector crate shall expose ``ZenohConnector<C: PayloadCodec>``
+   that implements the ``Connector`` trait with
+   ``type Routing = ZenohRouting`` and ``type Codec = C``.
+
+.. req:: ZenohRouting carries key_expr and pub/sub QoS fields
+   :id: REQ_0401
+   :status: open
+   :satisfies: FEAT_0043
+
+   The ``ZenohRouting`` struct shall carry the Zenoh key expression
+   (``key_expr: KeyExprOwned``), congestion control mode
+   (``Block | Drop``), priority (``RealTime..Background``),
+   reliability (``Reliable | BestEffort``), and a boolean
+   ``express`` flag (batching opt-out). It shall implement the
+   ``Routing`` marker trait. Validation of the key expression shall
+   occur on the plugin side inside ``create_writer`` /
+   ``create_reader`` (and the query-side analogues), before any
+   iceoryx2 service is created; an invalid expression shall yield
+   ``ConnectorError::Configuration``.
+
+.. req:: JsonCodec is the default codec for Zenoh
+   :id: REQ_0402
+   :status: open
+   :satisfies: FEAT_0043
+
+   The Zenoh connector shall accept any ``PayloadCodec`` via its
+   ``C`` generic parameter (re-affirming :need:`REQ_0211`), with
+   ``JsonCodec`` as the default codec used by example wiring
+   (re-affirming :need:`REQ_0212`).
+
+.. req:: Tokio sidecar contained inside the Zenoh connector crate
+   :id: REQ_0403
+   :status: open
+   :satisfies: FEAT_0043
+
+   The Zenoh gateway shall host the ``zenoh::Session`` and all
+   Zenoh async callbacks on a tokio runtime contained inside
+   ``sonic-connector-zenoh``. Tokio shall not leak into
+   sonic-executor's WaitSet thread (mirrors :need:`REQ_0321` and
+   :need:`REQ_0258`).
+
+.. req:: Zenoh bridge channels are bounded
+   :id: REQ_0404
+   :status: open
+   :satisfies: FEAT_0043
+
+   The outbound (sonic-executor → tokio) and inbound (tokio →
+   sonic-executor) bridges between the plugin and the Zenoh gateway
+   sidecar shall be bounded channels with capacities configurable
+   via ``ZenohConnectorOptions`` (``outbound_bridge_capacity`` and
+   ``inbound_bridge_capacity``).
+
+.. req:: Outbound bridge saturation surfaces as BackPressure
+   :id: REQ_0405
+   :status: open
+   :satisfies: FEAT_0043
+
+   When the outbound bridge channel is full, ``ChannelWriter::send``
+   (and any other plugin-side write entry-point that feeds the
+   outbound bridge) shall return ``ConnectorError::BackPressure``
+   and the gateway shall report ``ConnectorHealth::Degraded``.
+
+.. req:: Inbound bridge saturation surfaces as DroppedInbound
+   :id: REQ_0406
+   :status: open
+   :satisfies: FEAT_0043
+
+   When the inbound bridge channel is full, the gateway shall emit
+   ``HealthEvent::DroppedInbound { count }`` and drop the offending
+   inbound Zenoh sample or reply chunk for that callback.
+
+.. req:: Zenoh zero-copy publish via iceoryx2 loan
+   :id: REQ_0407
+   :status: open
+   :satisfies: FEAT_0043
+
+   ``ChannelWriter::send`` on a Zenoh channel shall publish
+   envelopes via ``Publisher::loan`` so that the codec writes the
+   payload directly into shared memory (re-affirms :need:`REQ_0205`).
+
+.. req:: Zenoh gateway is byte-only on the inbound publish path
+   :id: REQ_0408
+   :status: open
+   :satisfies: FEAT_0043
+
+   On the inbound leg (Zenoh peer → plugin), the gateway shall
+   publish the raw payload bytes received from the Zenoh subscriber
+   or reply callback onto the channel's inbound iceoryx2 service as
+   a ``ConnectorEnvelope`` without invoking the channel's codec —
+   codec decoding is the responsibility of the plugin-side
+   ``ChannelReader::try_recv`` (symmetric with :need:`REQ_0327`).
+
 ----
 
 Anti-goals
