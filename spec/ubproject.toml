@@ -9,6 +9,10 @@ name = "sonic-spec"
 id_required = true
 id_length = 6
 
+# Extra options carried by safety artefacts. `asil` holds a free-form
+# ISO 26262 ASIL value: "QM" | "A" | "B" | "C" | "D" | "B(D)" | "C(D)" | etc.
+extra_options = ["asil"]
+
 # Need types — directives available in RST. Extend as the spec grows.
 [[needs.types]]
 directive = "feat"
@@ -138,11 +142,6 @@ title = "Assumption of Use"
 prefix = "AOU_"
 color = "#E8C8A0"
 style = "node"
-
-# Extra option carried by safety artefacts. Free-form string holding
-# ISO 26262 ASIL values: "QM" | "A" | "B" | "C" | "D" | "B(D)" | "C(D)" | etc.
-[needs.extra_options]
-asil = "ISO 26262 ASIL of the artefact (QM, A, B, C, D, or decomposed form like 'B(D)')."
 
 # Extra link types — additional traceability relations beyond the built-in
 # `:links:` option. Keyed by option name; each entry sets the outgoing and
