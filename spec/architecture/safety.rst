@@ -8,8 +8,16 @@ Architecture decisions supporting the SEooC safety concept (see
 
 .. arch-decision:: Process boundary as spatial isolation context
    :id: ADR_0050
-   :status: accepted
+   :status: open
    :refines: AFSR_0001, AFSR_0002
+   :satisfies: TSR_0003, TSR_0009
+
+   **Context.** Sonic-hosted items at different integrity levels
+   (safety-critical and QM-grade) must coexist in the same workspace
+   without QM code being able to corrupt safety-critical state. The
+   spatial Freedom From Interference argument has to hold without
+   certifying the entire stack (host OS, libc, every transitive
+   dependency) to ASIL B(D).
 
    **Decision.** Adopt OS process boundaries as the unit of spatial
    isolation between safety-critical and QM-grade hosted code. Cross-
@@ -33,12 +41,17 @@ Architecture decisions supporting the SEooC safety concept (see
    becomes load-bearing; per-crate integrity-level tags in
    ``Cargo.toml`` metadata are a natural follow-on.
 
-   **Satisfies.** :need:`TSR_0003`, :need:`TSR_0009`.
-
 .. arch-decision:: Bounded allocator as spatial-determinism anchor
    :id: ADR_0051
-   :status: accepted
+   :status: open
    :refines: AFSR_0003
+   :satisfies: TSR_0001, TSR_0002
+
+   **Context.** Safety-critical hosted items at ASIL B(D) need
+   deterministic memory-allocation behavior to meet their FTTI bound
+   and must not be denied allocations by allocation pressure from
+   QM-grade items. Standard system allocators don't provide either
+   guarantee.
 
    **Decision.** All allocation by safety-critical hosted code goes
    through ``sonic-bounded-alloc`` with compile-time-declared
@@ -57,5 +70,3 @@ Architecture decisions supporting the SEooC safety concept (see
    the cap requires a rebuild. Partitioned pools (:need:`TSR_0002`)
    require extending ``sonic-bounded-alloc``'s public API to take an
    integrity-level argument at the allocator-init macro.
-
-   **Satisfies.** :need:`TSR_0001`, :need:`TSR_0002`.
