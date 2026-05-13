@@ -362,6 +362,16 @@ fn spawn_query_with_timeout<S>(
                 // Timeout fired before session.query completed — emit
                 // the synthetic 0x03 terminator on the reply path so
                 // the querier sees `QuerierEvent::Timeout` (TEST_0307).
+                //
+                // TODO(Z4f): with RealZenohSession, an upstream reply
+                // callback may still fire AFTER this timeout, leaking a
+                // stray 0x01 / 0x02 frame on `id` and surfacing a Reply
+                // or EndOfStream event past Timeout on the querier. The
+                // mock path is unaffected because MockZenohSession
+                // resolves `session.query` deterministically inside the
+                // timeout window. Fix shape: per-correlation "sealed"
+                // flag (sidecar `HashSet<QueryId>` or a bit on the
+                // `CorrelatedPublish`) checked before publishing.
                 let _ = publisher_for_timeout.publish_with_correlation(
                     id,
                     &[crate::session::FrameKind::Timeout.discriminator()],

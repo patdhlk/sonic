@@ -521,7 +521,6 @@ where
             q_writer_plugin,
             r_reader_plugin,
             self.codec.clone(),
-            self.state.options().query_timeout,
         ))
     }
 

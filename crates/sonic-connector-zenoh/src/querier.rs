@@ -88,14 +88,6 @@ where
     writer: RawChannelWriter<N>,
     reader: RawChannelReader<N>,
     codec: C,
-    /// Cached default timeout from `ZenohConnectorOptions::query_timeout`.
-    /// Z4c plumbs the per-call timeout through the envelope's `reserved`
-    /// word and the gateway resolves `reserved == 0` to its own copy of
-    /// this value, so the plugin no longer reads it on the hot path.
-    /// Retained on the struct for diagnostics / future use (e.g. when a
-    /// querier-side preflight check needs the configured default).
-    #[allow(dead_code)]
-    default_timeout: Duration,
     scratch: Vec<u8>,
     _ty: PhantomData<fn() -> (Q, R)>,
 }
@@ -112,13 +104,11 @@ where
         writer: RawChannelWriter<N>,
         reader: RawChannelReader<N>,
         codec: C,
-        default_timeout: Duration,
     ) -> Self {
         Self {
             writer,
             reader,
             codec,
-            default_timeout,
             scratch: vec![0u8; N],
             _ty: PhantomData,
         }
