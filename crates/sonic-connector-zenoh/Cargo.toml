@@ -11,10 +11,10 @@ description  = "Zenoh reference connector for the sonic-connector framework. Imp
 [features]
 default = []
 # `zenoh-integration` pulls the real `zenoh` crate and exposes
-# `RealZenohSession` (added in Z4). Off by default so consumers
+# `RealZenohSession` (added in Z4f). Off by default so consumers
 # that only want the framework types and `MockZenohSession` don't
 # pull zenoh's transitive dependencies.
-zenoh-integration = []
+zenoh-integration = ["dep:zenoh"]
 
 [dependencies]
 sonic-connector-core           = { path = "../sonic-connector-core" }
@@ -26,6 +26,8 @@ crossbeam-channel              = { workspace = true }
 tokio                          = { workspace = true }
 serde                          = { workspace = true, features = ["std"] }
 thiserror                      = { workspace = true }
+tracing                        = { workspace = true }
+zenoh                          = { version = "1", optional = true, default-features = false }
 
 [dev-dependencies]
 sonic-connector-codec = { path = "../sonic-connector-codec" }
