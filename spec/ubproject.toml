@@ -98,6 +98,52 @@ prefix = "GLOSS_"
 color = "#D8D8D8"
 style = "node"
 
+# ISO 26262 SEooC safety-concept types. The `assumed-*` prefix marks
+# work products that sit *above* sonic's boundary — illustrative inputs
+# from a synthetic item HARA that the integrator validates against
+# their real item. `tsr` and `aou` are sonic's own commitments and
+# declarations, not assumed.
+
+[[needs.types]]
+directive = "assumed-hazard"
+title = "Assumed Hazard"
+prefix = "AHZ_"
+color = "#E0A6A6"
+style = "node"
+
+[[needs.types]]
+directive = "assumed-safety-goal"
+title = "Assumed Safety Goal"
+prefix = "ASG_"
+color = "#D88A8A"
+style = "node"
+
+[[needs.types]]
+directive = "assumed-fsr"
+title = "Assumed Functional Safety Requirement"
+prefix = "AFSR_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "tsr"
+title = "Technical Safety Requirement"
+prefix = "TSR_"
+color = "#BFD8D2"
+style = "node"
+
+[[needs.types]]
+directive = "aou"
+title = "Assumption of Use"
+prefix = "AOU_"
+color = "#E8C8A0"
+style = "node"
+
+# Extra option carried by safety artefacts. Free-form string holding
+# ISO 26262 ASIL values: "QM" | "A" | "B" | "C" | "D" | "B(D)" | "C(D)" | etc.
+[needs.extra_options]
+asil = "ISO 26262 ASIL of the artefact (QM, A, B, C, D, or decomposed form like 'B(D)')."
+
 # Extra link types — additional traceability relations beyond the built-in
 # `:links:` option. Keyed by option name; each entry sets the outgoing and
 # incoming display text. (sphinx-needs 8.0 renamed extra_links → links and
