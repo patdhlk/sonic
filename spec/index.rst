@@ -21,6 +21,7 @@ framework on top of `iceoryx2`_.
    requirements/index
    architecture/index
    verification/index
+   safety/index
 
 Indices
 -------
