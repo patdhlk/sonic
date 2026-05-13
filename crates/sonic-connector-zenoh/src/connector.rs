@@ -300,12 +300,12 @@ where
             // does not legally follow the monitor's initial
             // `Connecting` (e.g. `Closed` from `Connecting` is legal
             // via the `Down` mapping; `Alive` is legal via `Up`).
-            health.notify_transition(&last);
+            health.apply_state(&last);
             while !stop_for_health.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let current = session_for_health.state();
                 if current != last {
-                    health.notify_transition(&current);
+                    health.apply_state(&current);
                     last = current.clone();
                 }
                 if matches!(current, SessionState::Closed { .. }) {

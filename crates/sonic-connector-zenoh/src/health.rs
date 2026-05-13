@@ -98,11 +98,11 @@ impl ZenohHealthMonitor {
         self.rx.clone()
     }
 
-    /// Map an observed [`SessionState`] transition into a
-    /// [`ConnectorHealth`] target and attempt the transition. Used by
-    /// the Z4e health watcher task — each observed change of the
-    /// underlying session state pushes one event onto the broadcast
-    /// channel via [`Self::transition_to`].
+    /// Apply an observed session state to the monitor. Maps the
+    /// [`SessionState`] into a [`ConnectorHealth`] target and attempts
+    /// the transition. Used by the Z4e health watcher task — each
+    /// observed change of the underlying session state pushes one
+    /// event onto the broadcast channel via [`Self::transition_to`].
     ///
     /// Mapping (per `ARCH_0012`'s reachable edges):
     ///
@@ -114,7 +114,7 @@ impl ZenohHealthMonitor {
     /// `Alive` while already `Up`, or `Connecting` while `Up`) are
     /// dropped silently — the watcher should not panic on a benign
     /// no-op or an unreachable state-machine edge.
-    pub(crate) fn notify_transition(&self, next: &SessionState) {
+    pub(crate) fn apply_state(&self, next: &SessionState) {
         let target = match next {
             SessionState::Connecting => ConnectorHealth::Connecting {
                 since: Instant::now(),
