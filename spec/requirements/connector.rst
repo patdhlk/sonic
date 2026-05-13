@@ -1213,3 +1213,23 @@ directives) are emitted in :doc:`../verification/connector`.
    :filter: "REQ_02" in id or ("REQ_03" in id and id >= "REQ_0310") or "REQ_04" in id
    :columns: id, title, status, satisfies
    :show_filters:
+
+Safety refinements
+------------------
+
+The connector framework carries five TSRs from the SEooC safety
+concept (see :doc:`../safety/tsc`):
+
+* :need:`TSR_0005` (compile-time channel directionality) —
+  **implemented** by :need:`BB_0001`, :need:`BB_0005`.
+* :need:`TSR_0006` (bounded health-event latency) — **implemented**
+  by :need:`REQ_0440`, :need:`REQ_0441`, :need:`REQ_0442`,
+  :need:`REQ_0443`, :need:`REQ_0444`.
+* :need:`TSR_0007` (single-publisher iceoryx2 topology for SC
+  channels) — **implemented** (iceoryx2 default).
+* :need:`TSR_0008` (envelope sequence + CRC integrity) — **draft**;
+  current ``ConnectorEnvelope<N>`` carries a ``CorrelationId`` but no
+  sequence or CRC.
+* :need:`TSR_0009` (cross-process hosting mode) — **draft**; requires
+  per-process iceoryx2 segment capability wiring at the
+  ``ConnectorGateway`` layer. See :need:`ADR_0050`.
