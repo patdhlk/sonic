@@ -8,9 +8,17 @@
 //! `Connector` trait impl (`name`, `health`, `subscribe_health`,
 //! `register_with`, `create_writer`, `create_reader`).
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Type-erased owning handle for session-side declarations
+/// (subscriber, queryable). Stored in [`ZenohState::handles`]; on
+/// connector drop the bag drops, each `Box<dyn Any + Send + Sync>`
+/// drops, and each handle's `Drop` impl releases its session-side
+/// resource.
+type AnyHandle = Box<dyn Any + Send + Sync>;
 
 use iceoryx2::node::Node;
 use iceoryx2::prelude::{NodeBuilder, ipc};
@@ -33,6 +41,12 @@ pub struct ZenohState {
     stop: Arc<AtomicBool>,
     correlation_map: CorrelationMap,
     query_reply_publishers: QueryReplyPublishers,
+    /// Type-erased bag of session-declaration handles
+    /// (subscriber, queryable). Held for the lifetime of the
+    /// connector — Z4d's lifecycle story: when the connector drops,
+    /// `Arc<ZenohState>` reaches strong-count 0, the bag drops, each
+    /// handle's `Drop` impl tears down its session-side resource.
+    handles: Mutex<Vec<AnyHandle>>,
 }
 
 impl std::fmt::Debug for ZenohState {
@@ -67,7 +81,19 @@ impl ZenohState {
             stop: Arc::new(AtomicBool::new(false)),
             correlation_map: Arc::new(Mutex::new(HashMap::new())),
             query_reply_publishers: Arc::new(Mutex::new(HashMap::new())),
+            handles: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Take ownership of a handle whose drop releases a session-side
+    /// resource (subscriber, queryable). Holds the handle for the
+    /// lifetime of this state — when the connector drops, the bag
+    /// drops, every handle's `Drop` impl runs.
+    pub(crate) fn push_handle<H: Any + Send + Sync>(&self, h: H) {
+        self.handles
+            .lock()
+            .expect("handles mutex not poisoned")
+            .push(Box::new(h));
     }
 
     /// Borrow the shared health monitor.
@@ -349,9 +375,6 @@ where
 
         // Wire the session subscriber: bytes from Zenoh arrive in the
         // callback and are forwarded to the iox raw publisher.
-        //
-        // TODO(Z4d): track the returned `SubscriptionHandle` rather than
-        // leaking it; Z4d adds explicit channel lifecycle management.
         let sink: crate::session::PayloadSink = Box::new(move |bytes: &[u8]| {
             let _ = inbound_for_callback.publish_bytes(bytes);
         });
@@ -381,9 +404,10 @@ where
                 .block_on(session.subscribe(&routing, sink))
                 .map_err(|e| ConnectorError::stack(SessionFailure(format!("{e}"))))?
         };
-        // Intentionally leak the handle for the lifetime of the
-        // connector; lifecycle cleanup is deferred to Z4d.
-        Box::leak(Box::new(sub_handle));
+        // Z4d: stash the handle in the state's typed-erased bag.
+        // When the connector drops, the bag drops, this handle's
+        // `Drop` impl runs and tears down the session subscriber.
+        self.state.push_handle(sub_handle);
 
         self.state
             .registry()
@@ -619,10 +643,10 @@ where
                     ConnectorError::stack(SessionFailure(format!("declare_queryable: {e}")))
                 })?
         };
-        // TODO(Z4d): refine queryable lifecycle. Z4a still leaks the
-        // handle for the connector lifetime, mirroring how
-        // create_reader leaks the SubscriptionHandle.
-        Box::leak(Box::new(qable_handle));
+        // Z4d: stash the handle in the state's typed-erased bag,
+        // mirroring `create_reader`. Connector drop → bag drop →
+        // handle drop → session queryable torn down.
+        self.state.push_handle(qable_handle);
 
         {
             let mut reg = self

@@ -120,7 +120,14 @@ impl MockZenohSession {
         self.query_hangs.store(hang, Ordering::Release);
     }
 
-    fn subscriber_count(&self) -> usize {
+    /// Sum of subscriber callbacks across all key-expression buckets.
+    /// Used by Z4d's lifecycle test to confirm `SubscriptionHandle`'s
+    /// `Drop` impl removes the callback when the connector drops.
+    ///
+    /// # Panics
+    /// Panics only if the subscribers mutex is poisoned, which would
+    /// require another thread to panic while holding the lock.
+    pub fn subscriber_count(&self) -> usize {
         self.subscribers
             .lock()
             .unwrap()
@@ -129,7 +136,13 @@ impl MockZenohSession {
             .sum()
     }
 
-    fn queryable_count(&self) -> usize {
+    /// Sum of queryable callbacks across all key-expression buckets.
+    /// Counterpart to [`Self::subscriber_count`] for queryables.
+    ///
+    /// # Panics
+    /// Panics only if the queryables mutex is poisoned, which would
+    /// require another thread to panic while holding the lock.
+    pub fn queryable_count(&self) -> usize {
         self.queryables
             .lock()
             .unwrap()
