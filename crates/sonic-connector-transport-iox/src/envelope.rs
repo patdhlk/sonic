@@ -37,8 +37,13 @@ pub struct ConnectorEnvelope<const N: usize> {
     /// Receivers must trust this value (the framework validates it
     /// against `N` at send time — `TEST_0125`).
     pub payload_len: u32,
-    /// Reserved for future header extensions (e.g. flags, priority).
-    /// Senders shall write zero; receivers shall ignore.
+    /// Caller-defined metadata slot. Defaults to zero, and legacy
+    /// senders (`send_raw_bytes`, [`Default`]) always write zero.
+    /// Senders MAY stamp a non-zero value via `send_raw_bytes_v2` (or
+    /// any future v2+ writer) to carry caller-defined metadata;
+    /// receivers MUST NOT assume zero. The connector-zenoh layer is the
+    /// only documented user today, where this field carries a per-call
+    /// query timeout (`REQ_0425`).
     pub reserved: u32,
     /// Inline payload buffer. Only the first `payload_len` bytes are
     /// valid; the rest is uninitialised (the loan path may leave
