@@ -128,11 +128,11 @@
 
     {
       "id": "status-enum",
-      "message": "status must be one of: open, draft, review, approved, implemented, rejected",
+      "message": "status must be one of: open, draft, review, approved, implemented, rejected, assumed, accepted",
       "validate": {
         "local": {
           "properties": {
-            "status": { "enum": ["open", "draft", "review", "approved", "implemented", "rejected"] }
+            "status": { "enum": ["open", "draft", "review", "approved", "implemented", "rejected", "assumed", "accepted"] }
           }
         }
       }
