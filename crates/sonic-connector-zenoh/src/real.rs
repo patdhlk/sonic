@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
 
 use tokio::sync::Mutex as AsyncMutex;
+use tracing::{debug, info, warn};
 use zenoh::Wait;
 
 use crate::options::{SessionMode, ZenohConnectorOptions};
@@ -89,11 +90,16 @@ impl RealZenohSession {
     /// the underlying `zenoh::open` call fails.
     pub async fn open(opts: &ZenohConnectorOptions) -> Result<Self, SessionError> {
         let config = build_zenoh_config(opts)?;
-        let session = zenoh::open(config)
-            .await
-            .map_err(|e| SessionError::OpenFailed {
-                reason: format!("zenoh::open: {e}"),
-            })?;
+        let session = match zenoh::open(config).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "zenoh::open failed");
+                return Err(SessionError::OpenFailed {
+                    reason: format!("zenoh::open: {e}"),
+                });
+            }
+        };
+        info!("zenoh session opened");
         Ok(Self {
             inner: Arc::new(session),
             publishers: AsyncMutex::new(HashMap::new()),
@@ -184,6 +190,7 @@ impl ZenohSessionLike for RealZenohSession {
             if let Some(p) = map.get(&key) {
                 Arc::clone(p)
             } else {
+                debug!(%key, "declaring zenoh publisher");
                 let p = self
                     .inner
                     .declare_publisher(key.clone())
@@ -256,12 +263,15 @@ impl ZenohSessionLike for RealZenohSession {
                 // Arc count goes to zero and `DoneOnDrop` fires
                 // `on_done`.
                 let _keep_alive = &done_guard;
-                if let Ok(sample) = reply.result() {
-                    let bytes = sample.payload().to_bytes();
-                    (on_reply_arc)(&bytes);
+                match reply.result() {
+                    Ok(sample) => {
+                        let bytes = sample.payload().to_bytes();
+                        (on_reply_arc)(&bytes);
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "zenoh reply was an error");
+                    }
                 }
-                // Reply-side errors are silently dropped here; Z4h
-                // introduces tracing for peer-side error reporting.
             })
             .await
             .map_err(|e| SessionError::PublishFailed {

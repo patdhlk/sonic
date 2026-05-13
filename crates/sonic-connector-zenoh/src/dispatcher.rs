@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use sonic_connector_core::ConnectorError;
 use sonic_connector_transport_iox::{RawChannelReader, RawChannelWriter};
+use tracing::{debug, warn};
 
 use crate::registry::{
     ChannelBinding, ChannelRegistry, CorrelatedPublish, InboundPublish, OutboundDrain, QuerierDrain,
@@ -229,9 +230,13 @@ async fn drain_outbound_once<S>(
         match entry.binding {
             BindingSnapshot::Outbound(drain) => {
                 while let Ok(Some(n)) = drain.drain_into(scratch) {
-                    // Errors are intentionally dropped here — Z4h adds
-                    // tracing on the failure path.
-                    let _ = session.publish(&entry.routing, &scratch[..n]).await;
+                    if let Err(e) = session.publish(&entry.routing, &scratch[..n]).await {
+                        warn!(
+                            descriptor = %entry.descriptor_name,
+                            error = %e,
+                            "session.publish failed; dropping outbound chunk"
+                        );
+                    }
                 }
             }
             BindingSnapshot::QuerierOut(drain) => {
@@ -294,11 +299,20 @@ async fn drain_outbound_once<S>(
                                 replier.terminate();
                             }
                         }
-                        Some(crate::session::FrameKind::Timeout) | None => {
+                        Some(crate::session::FrameKind::Timeout) => {
                             // 0x03 should never come from the plugin
-                            // (gateway-synthetic only). Unknown
-                            // discriminators are silently dropped —
-                            // Z4h adds logging.
+                            // (gateway-synthetic only).
+                            warn!(
+                                ?id,
+                                "unexpected 0x03 frame on .reply.out (gateway-synthetic only)"
+                            );
+                        }
+                        None => {
+                            warn!(
+                                discriminator,
+                                ?id,
+                                "unknown frame discriminator on .reply.out"
+                            );
                         }
                     }
                 }
@@ -354,9 +368,11 @@ fn spawn_query_with_timeout<S>(
         let query_fut =
             session.query(&routing, &payload, effective_timeout, on_reply, on_done);
         match tokio::time::timeout(effective_timeout, query_fut).await {
-            Ok(_inner) => {
-                // session.query completed (its callbacks already
-                // fired). Z4h adds tracing for inner errors.
+            Ok(Ok(())) => {
+                debug!(query_id = ?id, "query completed");
+            }
+            Ok(Err(e)) => {
+                warn!(query_id = ?id, error = %e, "session.query returned error");
             }
             Err(_elapsed) => {
                 // Timeout fired before session.query completed — emit
@@ -372,6 +388,11 @@ fn spawn_query_with_timeout<S>(
                 // timeout window. Fix shape: per-correlation "sealed"
                 // flag (sidecar `HashSet<QueryId>` or a bit on the
                 // `CorrelatedPublish`) checked before publishing.
+                warn!(
+                    query_id = ?id,
+                    ?effective_timeout,
+                    "query timed out, emitting 0x03"
+                );
                 let _ = publisher_for_timeout.publish_with_correlation(
                     id,
                     &[crate::session::FrameKind::Timeout.discriminator()],

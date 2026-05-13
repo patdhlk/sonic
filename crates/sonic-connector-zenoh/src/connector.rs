@@ -300,11 +300,17 @@ where
             // does not legally follow the monitor's initial
             // `Connecting` (e.g. `Closed` from `Connecting` is legal
             // via the `Down` mapping; `Alive` is legal via `Up`).
+            tracing::info!(state = ?last, "zenoh health watcher started");
             health.apply_state(&last);
             while !stop_for_health.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let current = session_for_health.state();
                 if current != last {
+                    tracing::info!(
+                        from = ?last,
+                        to = ?current,
+                        "zenoh session state changed"
+                    );
                     health.apply_state(&current);
                     last = current.clone();
                 }
@@ -312,6 +318,7 @@ where
                     // No further transitions are observable once the
                     // session is closed; exit so the runtime can shut
                     // down cleanly.
+                    tracing::info!("zenoh session closed; health watcher exiting");
                     break;
                 }
             }
