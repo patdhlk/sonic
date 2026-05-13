@@ -19,6 +19,7 @@ pub mod health;
 pub mod mock;
 pub mod options;
 pub mod querier;
+pub mod queryable;
 pub mod registry;
 pub mod routing;
 pub mod session;
@@ -32,6 +33,7 @@ pub use options::{
     ZenohConnectorOptionsBuilder,
 };
 pub use querier::{mint_query_id, QuerierEvent, ZenohQuerier};
+pub use queryable::ZenohQueryable;
 pub use routing::{
     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
 };
