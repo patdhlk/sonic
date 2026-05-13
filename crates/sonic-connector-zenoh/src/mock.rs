@@ -168,7 +168,11 @@ impl ZenohSessionLike for MockZenohSession {
         self.state.read().unwrap().clone()
     }
 
-    fn publish(&self, routing: &ZenohRouting, payload: &[u8]) -> Result<(), SessionError> {
+    async fn publish(
+        &self,
+        routing: &ZenohRouting,
+        payload: &[u8],
+    ) -> Result<(), SessionError> {
         if !matches!(*self.state.read().unwrap(), SessionState::Alive) {
             return Err(SessionError::NotAlive {
                 reason: "mock session not alive".into(),
@@ -192,7 +196,7 @@ impl ZenohSessionLike for MockZenohSession {
         Ok(())
     }
 
-    fn subscribe(
+    async fn subscribe(
         &self,
         routing: &ZenohRouting,
         sink: PayloadSink,
@@ -221,7 +225,7 @@ impl ZenohSessionLike for MockZenohSession {
         Ok(SubscriptionHandle(Box::new(guard)))
     }
 
-    fn query(
+    async fn query(
         &self,
         routing: &ZenohRouting,
         payload: &[u8],
@@ -291,7 +295,7 @@ impl ZenohSessionLike for MockZenohSession {
         Ok(())
     }
 
-    fn declare_queryable(
+    async fn declare_queryable(
         &self,
         routing: &ZenohRouting,
         on_query: QuerySink,

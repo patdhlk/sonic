@@ -4,7 +4,7 @@
 //! bindings and iterates them in insertion order without per-iter heap
 //! allocation. Mirrors `sonic_connector_ethercat::registry` tests.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sonic_connector_core::ConnectorError;
 use sonic_connector_zenoh::registry::{
@@ -47,7 +47,7 @@ fn empty_registry_iter_is_empty() {
 #[test]
 fn registry_records_outbound_channel() {
     let mut registry = ChannelRegistry::with_capacity(4);
-    let drain = Box::new(CountingDrain {
+    let drain: Arc<dyn OutboundDrain> = Arc::new(CountingDrain {
         calls: Mutex::new(0),
     });
 
@@ -92,7 +92,7 @@ fn registry_records_inbound_channel() {
 fn registry_iter_preserves_insertion_order() {
     let mut registry = ChannelRegistry::with_capacity(4);
     for n in ["alpha", "beta", "gamma", "delta"] {
-        let drain = Box::new(CountingDrain {
+        let drain: Arc<dyn OutboundDrain> = Arc::new(CountingDrain {
             calls: Mutex::new(0),
         });
         registry
@@ -111,10 +111,10 @@ fn registry_iter_preserves_insertion_order() {
 #[test]
 fn duplicate_name_returns_error() {
     let mut registry = ChannelRegistry::with_capacity(4);
-    let drain1 = Box::new(CountingDrain {
+    let drain1: Arc<dyn OutboundDrain> = Arc::new(CountingDrain {
         calls: Mutex::new(0),
     });
-    let drain2 = Box::new(CountingDrain {
+    let drain2: Arc<dyn OutboundDrain> = Arc::new(CountingDrain {
         calls: Mutex::new(0),
     });
 
@@ -146,7 +146,7 @@ fn separate_outbound_and_inbound_with_same_name_is_allowed() {
             "robot/arm".to_string(),
             routing("robot/arm"),
             ChannelDirection::Outbound,
-            ChannelBinding::Outbound(Box::new(CountingDrain {
+            ChannelBinding::Outbound(Arc::new(CountingDrain {
                 calls: Mutex::new(0),
             })),
         )
@@ -206,7 +206,7 @@ fn registry_records_querier_out_binding() {
             "robot/query".to_string(),
             routing("robot/query"),
             ChannelDirection::QuerierOut,
-            ChannelBinding::QuerierOut(Box::new(NullQuerierDrain)),
+            ChannelBinding::QuerierOut(Arc::new(NullQuerierDrain)),
         )
         .expect("registered");
     let entry = registry.iter().next().unwrap();
@@ -258,7 +258,7 @@ fn registry_records_queryable_reply_out_binding() {
             "robot/query".to_string(),
             routing("robot/query"),
             ChannelDirection::QueryableReplyOut,
-            ChannelBinding::QueryableReplyOut(Box::new(NullReplyDrain)),
+            ChannelBinding::QueryableReplyOut(Arc::new(NullReplyDrain)),
         )
         .expect("registered");
     let entry = registry.iter().next().unwrap();
@@ -292,7 +292,7 @@ fn one_query_channel_registers_all_four_directions() {
             nm.clone(),
             r.clone(),
             ChannelDirection::QuerierOut,
-            ChannelBinding::QuerierOut(Box::new(NullQuerierDrain)),
+            ChannelBinding::QuerierOut(Arc::new(NullQuerierDrain)),
         )
         .unwrap();
     registry
@@ -320,7 +320,7 @@ fn one_query_channel_registers_all_four_directions() {
             nm,
             r,
             ChannelDirection::QueryableReplyOut,
-            ChannelBinding::QueryableReplyOut(Box::new(NullReplyDrain)),
+            ChannelBinding::QueryableReplyOut(Arc::new(NullReplyDrain)),
         )
         .unwrap();
 

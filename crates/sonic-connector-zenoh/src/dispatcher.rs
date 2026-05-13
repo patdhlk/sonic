@@ -48,8 +48,13 @@ const MAX_DRAIN_SCRATCH: usize = 4096;
 /// Implements [`OutboundDrain`] so the dispatcher can drain bytes from
 /// the iceoryx2 raw subscriber as a trait object, erasing the const
 /// generic `N` from the registry.
+///
+/// The reader is `Mutex`-wrapped to give the drain interior mutability
+/// behind a `Send + Sync` surface — [`RawChannelReader`] is `Send` but
+/// not `Sync`, and Z4a's snapshot pattern stores drains as
+/// `Arc<dyn OutboundDrain>` (which requires `Send + Sync`).
 pub struct IoxOutboundDrain<const N: usize> {
-    reader: RawChannelReader<N>,
+    reader: Mutex<RawChannelReader<N>>,
 }
 
 impl<const N: usize> IoxOutboundDrain<N> {
@@ -57,13 +62,19 @@ impl<const N: usize> IoxOutboundDrain<N> {
     /// trait object.
     #[must_use]
     pub const fn new(reader: RawChannelReader<N>) -> Self {
-        Self { reader }
+        Self {
+            reader: Mutex::new(reader),
+        }
     }
 }
 
 impl<const N: usize> OutboundDrain for IoxOutboundDrain<N> {
     fn drain_into(&self, dest: &mut [u8]) -> Result<Option<usize>, ConnectorError> {
-        let Some(sample) = self.reader.try_recv_into(dest)? else {
+        let sample_opt = {
+            let reader = self.reader.lock().expect("outbound drain mutex poisoned");
+            reader.try_recv_into(dest)?
+        };
+        let Some(sample) = sample_opt else {
             return Ok(None);
         };
         Ok(Some(sample.payload_len))
@@ -145,14 +156,56 @@ where
             &correlation_map,
             &query_reply_publishers,
             query_timeout,
-        );
+        )
+        .await;
         tokio::time::sleep(tick_interval).await;
     }
     Ok(())
 }
 
+/// Per-iteration snapshot of one registry entry. Built under the
+/// registry lock and then iterated lock-free so the async session
+/// calls below never hold the registry mutex across an `.await`.
+struct RegistrySnapshot {
+    descriptor_name: std::borrow::Cow<'static, str>,
+    routing: crate::routing::ZenohRouting,
+    binding: BindingSnapshot,
+}
+
+/// Lock-snapshot mirror of [`ChannelBinding`]. Publish-side bindings
+/// (`Inbound`, `QuerierReplyIn`, `QueryableQueryIn`) collapse into
+/// [`BindingSnapshot::PublishSide`] because the dispatcher does not
+/// iterate them — those bindings are driven by session callbacks at
+/// registration time.
+enum BindingSnapshot {
+    Outbound(Arc<dyn OutboundDrain>),
+    QuerierOut(Arc<dyn QuerierDrain>),
+    QueryableReplyOut(Arc<dyn ReplyDrain>),
+    PublishSide,
+}
+
+impl RegistrySnapshot {
+    fn clone_arcs(entry: &crate::registry::RegisteredChannel) -> Self {
+        let binding = match &entry.binding {
+            ChannelBinding::Outbound(d) => BindingSnapshot::Outbound(Arc::clone(d)),
+            ChannelBinding::QuerierOut(d) => BindingSnapshot::QuerierOut(Arc::clone(d)),
+            ChannelBinding::QueryableReplyOut(d) => {
+                BindingSnapshot::QueryableReplyOut(Arc::clone(d))
+            }
+            ChannelBinding::Inbound(_)
+            | ChannelBinding::QuerierReplyIn(_)
+            | ChannelBinding::QueryableQueryIn(_) => BindingSnapshot::PublishSide,
+        };
+        Self {
+            descriptor_name: entry.descriptor_name.clone(),
+            routing: entry.routing.clone(),
+            binding,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // each arg is inherent to the dispatcher's responsibilities.
-fn drain_outbound_once<S>(
+async fn drain_outbound_once<S>(
     registry: &Mutex<ChannelRegistry>,
     session: &S,
     scratch: &mut [u8],
@@ -162,15 +215,26 @@ fn drain_outbound_once<S>(
 ) where
     S: ZenohSessionLike + ?Sized,
 {
-    let guard = registry.lock().expect("registry mutex poisoned");
-    for entry in guard.iter() {
-        match &entry.binding {
-            ChannelBinding::Outbound(drain) => {
+    // Snapshot the registry under the lock, then iterate lock-free.
+    // This is mandatory after Z4a: holding `MutexGuard<ChannelRegistry>`
+    // across `.await` would trip clippy::await_holding_lock AND
+    // deadlock against any caller that needs the registry while a
+    // session call is in flight.
+    let entries: Vec<RegistrySnapshot> = {
+        let guard = registry.lock().expect("registry mutex poisoned");
+        guard.iter().map(RegistrySnapshot::clone_arcs).collect()
+    };
+
+    for entry in entries {
+        match entry.binding {
+            BindingSnapshot::Outbound(drain) => {
                 while let Ok(Some(n)) = drain.drain_into(scratch) {
-                    let _ = session.publish(&entry.routing, &scratch[..n]);
+                    // Errors are intentionally dropped here — Z4h adds
+                    // tracing on the failure path.
+                    let _ = session.publish(&entry.routing, &scratch[..n]).await;
                 }
             }
-            ChannelBinding::QuerierOut(drain) => {
+            BindingSnapshot::QuerierOut(drain) => {
                 while let Ok(Some((id, n))) = drain.drain_query(scratch) {
                     // Look up the matching `.reply.in` publisher in
                     // the sidecar map; release the lock immediately so
@@ -201,22 +265,15 @@ fn drain_outbound_once<S>(
                             &[crate::session::FrameKind::EndOfStream.discriminator()],
                         );
                     });
-                    // For Z3, the mock's `session.query` is synchronous
-                    // and returns immediately. Timeout enforcement
-                    // (0x03 synthetic terminator) is deferred to Z4 —
-                    // when the real `zenoh::Session` lands, we'll wrap
-                    // this in `tokio::time::timeout`. For now, we pass
-                    // the timeout through but the mock ignores it.
-                    let _ = session.query(
-                        &entry.routing,
-                        &payload,
-                        query_timeout,
-                        on_reply,
-                        on_done,
-                    );
+                    // For Z4a we keep the timeout pass-through but do
+                    // NOT wrap in `tokio::time::timeout` — that is
+                    // Z4c's job (spawned timeout task with `Arc<S>`).
+                    let _ = session
+                        .query(&entry.routing, &payload, query_timeout, on_reply, on_done)
+                        .await;
                 }
             }
-            ChannelBinding::QueryableReplyOut(drain) => {
+            BindingSnapshot::QueryableReplyOut(drain) => {
                 while let Ok(Some((id, n))) = drain.drain_reply(scratch) {
                     if n == 0 {
                         continue;
@@ -247,14 +304,12 @@ fn drain_outbound_once<S>(
                             // 0x03 should never come from the plugin
                             // (gateway-synthetic only). Unknown
                             // discriminators are silently dropped —
-                            // Z4 adds logging.
+                            // Z4h adds logging.
                         }
                     }
                 }
             }
-            ChannelBinding::Inbound(_)
-            | ChannelBinding::QuerierReplyIn(_)
-            | ChannelBinding::QueryableQueryIn(_) => {
+            BindingSnapshot::PublishSide => {
                 // Publish-side bindings — driven by session callbacks
                 // at registration time, not by the dispatcher loop.
             }
@@ -264,8 +319,10 @@ fn drain_outbound_once<S>(
 
 /// iox-backed [`QuerierDrain`]. Drains envelopes from `.query.out`,
 /// returning `(QueryId, payload_len)`.
+///
+/// `Mutex`-wrapped for `Send + Sync` — see [`IoxOutboundDrain`].
 pub struct IoxQuerierDrain<const N: usize> {
-    reader: RawChannelReader<N>,
+    reader: Mutex<RawChannelReader<N>>,
 }
 
 impl<const N: usize> IoxQuerierDrain<N> {
@@ -273,7 +330,9 @@ impl<const N: usize> IoxQuerierDrain<N> {
     /// trait object.
     #[must_use]
     pub const fn new(reader: RawChannelReader<N>) -> Self {
-        Self { reader }
+        Self {
+            reader: Mutex::new(reader),
+        }
     }
 }
 
@@ -282,7 +341,11 @@ impl<const N: usize> QuerierDrain for IoxQuerierDrain<N> {
         &self,
         dest: &mut [u8],
     ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
-        let Some(sample) = self.reader.try_recv_into(dest)? else {
+        let sample_opt = {
+            let reader = self.reader.lock().expect("querier drain mutex poisoned");
+            reader.try_recv_into(dest)?
+        };
+        let Some(sample) = sample_opt else {
             return Ok(None);
         };
         Ok(Some((QueryId(sample.correlation_id), sample.payload_len)))
@@ -291,8 +354,10 @@ impl<const N: usize> QuerierDrain for IoxQuerierDrain<N> {
 
 /// iox-backed [`ReplyDrain`]. Drains envelopes from `.reply.out`,
 /// returning `(QueryId, payload_len)`.
+///
+/// `Mutex`-wrapped for `Send + Sync` — see [`IoxOutboundDrain`].
 pub struct IoxReplyDrain<const N: usize> {
-    reader: RawChannelReader<N>,
+    reader: Mutex<RawChannelReader<N>>,
 }
 
 impl<const N: usize> IoxReplyDrain<N> {
@@ -300,7 +365,9 @@ impl<const N: usize> IoxReplyDrain<N> {
     /// trait object.
     #[must_use]
     pub const fn new(reader: RawChannelReader<N>) -> Self {
-        Self { reader }
+        Self {
+            reader: Mutex::new(reader),
+        }
     }
 }
 
@@ -309,7 +376,11 @@ impl<const N: usize> ReplyDrain for IoxReplyDrain<N> {
         &self,
         dest: &mut [u8],
     ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
-        let Some(sample) = self.reader.try_recv_into(dest)? else {
+        let sample_opt = {
+            let reader = self.reader.lock().expect("reply drain mutex poisoned");
+            reader.try_recv_into(dest)?
+        };
+        let Some(sample) = sample_opt else {
             return Ok(None);
         };
         Ok(Some((QueryId(sample.correlation_id), sample.payload_len)))

@@ -26,22 +26,22 @@ fn mock_session_starts_alive() {
     assert_eq!(session.state(), SessionState::Alive);
 }
 
-#[test]
-fn publish_with_no_subscriber_does_not_error() {
+#[tokio::test]
+async fn publish_with_no_subscriber_does_not_error() {
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
-    session.publish(&r, b"hello").expect("publish ok");
+    session.publish(&r, b"hello").await.expect("publish ok");
 }
 
-#[test]
-fn pub_sub_loopback_single_subscriber() {
+#[tokio::test]
+async fn pub_sub_loopback_single_subscriber() {
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
 
     let (received, sink) = collect_sink();
-    let _sub = session.subscribe(&r, sink).expect("subscribed");
-    session.publish(&r, b"hello").expect("publish ok");
-    session.publish(&r, b"world").expect("publish ok");
+    let _sub = session.subscribe(&r, sink).await.expect("subscribed");
+    session.publish(&r, b"hello").await.expect("publish ok");
+    session.publish(&r, b"world").await.expect("publish ok");
 
     let got = received.lock().unwrap().clone();
     assert_eq!(got.len(), 2);
@@ -49,50 +49,50 @@ fn pub_sub_loopback_single_subscriber() {
     assert_eq!(got[1], b"world");
 }
 
-#[test]
-fn pub_sub_loopback_fans_out_to_multiple_subscribers() {
+#[tokio::test]
+async fn pub_sub_loopback_fans_out_to_multiple_subscribers() {
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
 
     let (received_a, sink_a) = collect_sink();
     let (received_b, sink_b) = collect_sink();
-    let _sub_a = session.subscribe(&r, sink_a).expect("sub_a");
-    let _sub_b = session.subscribe(&r, sink_b).expect("sub_b");
+    let _sub_a = session.subscribe(&r, sink_a).await.expect("sub_a");
+    let _sub_b = session.subscribe(&r, sink_b).await.expect("sub_b");
 
-    session.publish(&r, b"broadcast").expect("publish ok");
+    session.publish(&r, b"broadcast").await.expect("publish ok");
 
     assert_eq!(received_a.lock().unwrap().len(), 1);
     assert_eq!(received_b.lock().unwrap().len(), 1);
 }
 
-#[test]
-fn pub_sub_loopback_filters_by_key_expr() {
+#[tokio::test]
+async fn pub_sub_loopback_filters_by_key_expr() {
     let session = MockZenohSession::new();
     let arm = routing("robot/arm");
     let leg = routing("robot/leg");
 
     let (received, sink) = collect_sink();
-    let _sub = session.subscribe(&arm, sink).expect("subscribed");
+    let _sub = session.subscribe(&arm, sink).await.expect("subscribed");
 
-    session.publish(&arm, b"arm-payload").unwrap();
-    session.publish(&leg, b"leg-payload").unwrap();
+    session.publish(&arm, b"arm-payload").await.unwrap();
+    session.publish(&leg, b"leg-payload").await.unwrap();
 
     let got = received.lock().unwrap().clone();
     assert_eq!(got.len(), 1, "only arm payload should arrive");
     assert_eq!(got[0], b"arm-payload");
 }
 
-#[test]
-fn dropping_subscription_handle_stops_delivery() {
+#[tokio::test]
+async fn dropping_subscription_handle_stops_delivery() {
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
 
     let (received, sink) = collect_sink();
-    let sub = session.subscribe(&r, sink).expect("subscribed");
+    let sub = session.subscribe(&r, sink).await.expect("subscribed");
 
-    session.publish(&r, b"first").unwrap();
+    session.publish(&r, b"first").await.unwrap();
     drop(sub);
-    session.publish(&r, b"second").unwrap();
+    session.publish(&r, b"second").await.unwrap();
 
     let got = received.lock().unwrap().clone();
     assert_eq!(got.len(), 1);
@@ -113,8 +113,8 @@ fn programmable_session_state_steps() {
     assert_eq!(session.state(), SessionState::Connecting);
 }
 
-#[test]
-fn publish_returns_not_alive_when_closed() {
+#[tokio::test]
+async fn publish_returns_not_alive_when_closed() {
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
     session.set_state(SessionState::Closed {
@@ -123,13 +123,14 @@ fn publish_returns_not_alive_when_closed() {
 
     let err = session
         .publish(&r, b"ignored")
+        .await
         .expect_err("closed rejects publish");
     let msg = err.to_string();
     assert!(msg.contains("not alive"));
 }
 
-#[test]
-fn query_round_trip_to_single_queryable() {
+#[tokio::test]
+async fn query_round_trip_to_single_queryable() {
     use std::sync::{Arc, Mutex};
 
     let session = MockZenohSession::new();
@@ -146,6 +147,7 @@ fn query_round_trip_to_single_queryable() {
                 replier.terminate();
             }),
         )
+        .await
         .expect("queryable declared");
 
     let replies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -165,6 +167,7 @@ fn query_round_trip_to_single_queryable() {
                 *done_clone.lock().unwrap() = true;
             }),
         )
+        .await
         .expect("query dispatched");
 
     let got = replies.lock().unwrap().clone();
@@ -172,8 +175,8 @@ fn query_round_trip_to_single_queryable() {
     assert!(*done.lock().unwrap(), "on_done should have fired");
 }
 
-#[test]
-fn query_with_no_queryable_calls_done_immediately() {
+#[tokio::test]
+async fn query_with_no_queryable_calls_done_immediately() {
     let session = MockZenohSession::new();
     let r = routing("robot/no/queryable");
     let done = std::sync::Arc::new(std::sync::Mutex::new(false));
@@ -189,13 +192,14 @@ fn query_with_no_queryable_calls_done_immediately() {
                 *done_clone.lock().unwrap() = true;
             }),
         )
+        .await
         .expect("query dispatched");
 
     assert!(*done.lock().unwrap(), "on_done should fire even with no queryable");
 }
 
-#[test]
-fn query_fans_out_to_multiple_queryables() {
+#[tokio::test]
+async fn query_fans_out_to_multiple_queryables() {
     use std::sync::{Arc, Mutex};
 
     let session = MockZenohSession::new();
@@ -209,6 +213,7 @@ fn query_fans_out_to_multiple_queryables() {
                 replier.terminate();
             }),
         )
+        .await
         .unwrap();
     let _q2 = session
         .declare_queryable(
@@ -218,6 +223,7 @@ fn query_fans_out_to_multiple_queryables() {
                 replier.terminate();
             }),
         )
+        .await
         .unwrap();
 
     let replies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -230,6 +236,7 @@ fn query_fans_out_to_multiple_queryables() {
             Box::new(move |bytes| replies_clone.lock().unwrap().push(bytes.to_vec())),
             Box::new(|| {}),
         )
+        .await
         .unwrap();
 
     let got = replies.lock().unwrap().clone();
@@ -238,8 +245,8 @@ fn query_fans_out_to_multiple_queryables() {
     assert!(got.iter().any(|r| r == b"q2-reply"));
 }
 
-#[test]
-fn query_fails_when_session_closed() {
+#[tokio::test]
+async fn query_fails_when_session_closed() {
     let session = MockZenohSession::new();
     let r = routing("robot/test");
     session.set_state(SessionState::Closed {
@@ -253,13 +260,14 @@ fn query_fails_when_session_closed() {
             Box::new(|_| {}),
             Box::new(|| {}),
         )
+        .await
         .expect_err("closed session rejects query");
     let msg = err.to_string();
     assert!(msg.contains("not alive"));
 }
 
-#[test]
-fn dropping_queryable_handle_stops_receiving_queries() {
+#[tokio::test]
+async fn dropping_queryable_handle_stops_receiving_queries() {
     use std::sync::{Arc, Mutex};
 
     let session = MockZenohSession::new();
@@ -276,11 +284,13 @@ fn dropping_queryable_handle_stops_receiving_queries() {
                 replier.terminate();
             }),
         )
+        .await
         .unwrap();
 
     // First query: queryable fires.
     session
         .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .await
         .unwrap();
     assert_eq!(*fired.lock().unwrap(), 1);
 
@@ -289,6 +299,7 @@ fn dropping_queryable_handle_stops_receiving_queries() {
     // Second query after drop: queryable should NOT fire.
     session
         .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .await
         .unwrap();
     assert_eq!(*fired.lock().unwrap(), 1, "queryable should not fire after drop");
 }

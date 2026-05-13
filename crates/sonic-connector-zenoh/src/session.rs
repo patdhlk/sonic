@@ -169,16 +169,23 @@ impl<'a> ReplyFrame<'a> {
 /// implementations may stub out query operations (e.g.
 /// `MockZenohSession` in Z1) and fill them in later (Z3).
 ///
-/// All methods are non-async by design — the real `zenoh::Session`
-/// runs its callbacks on the gateway's tokio runtime, but the trait
-/// surface itself stays sync to keep the unit-test path mock-friendly.
+/// Z4a converted the I/O surface methods to async using stable
+/// async-in-traits (`impl Future + Send`) — the real `zenoh::Session`
+/// API is async, and the trait is only used as a generic bound
+/// (`S: ZenohSessionLike` in `ZenohConnector<S, C>`), never as
+/// `dyn ZenohSessionLike`. `state()` stays sync — it's a pure state
+/// read.
 pub trait ZenohSessionLike: Send + Sync + 'static {
     /// Current observable session state. Polled by the gateway to
     /// transition `ConnectorHealth`.
     fn state(&self) -> SessionState;
 
     /// Publish a sample on the given routing's key expression.
-    fn publish(&self, routing: &ZenohRouting, payload: &[u8]) -> Result<(), SessionError>;
+    fn publish(
+        &self,
+        routing: &ZenohRouting,
+        payload: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), SessionError>> + Send;
 
     /// Subscribe to samples matching the routing's key expression.
     /// Implementations return an opaque subscription handle that the
@@ -187,7 +194,7 @@ pub trait ZenohSessionLike: Send + Sync + 'static {
         &self,
         routing: &ZenohRouting,
         sink: PayloadSink,
-    ) -> Result<SubscriptionHandle, SessionError>;
+    ) -> impl std::future::Future<Output = Result<SubscriptionHandle, SessionError>> + Send;
 
     /// Issue a query against the given routing's key expression with
     /// the given request payload and timeout. The `on_reply` callback
@@ -202,7 +209,7 @@ pub trait ZenohSessionLike: Send + Sync + 'static {
         timeout: Duration,
         on_reply: PayloadSink,
         on_done: DoneCallback,
-    ) -> Result<(), SessionError>;
+    ) -> impl std::future::Future<Output = Result<(), SessionError>> + Send;
 
     /// Declare a queryable on the routing's key expression. The
     /// `on_query` callback receives an incoming query's payload + a
@@ -212,7 +219,7 @@ pub trait ZenohSessionLike: Send + Sync + 'static {
         &self,
         routing: &ZenohRouting,
         on_query: QuerySink,
-    ) -> Result<QueryableHandle, SessionError>;
+    ) -> impl std::future::Future<Output = Result<QueryableHandle, SessionError>> + Send;
 }
 
 /// Opaque subscription handle. Dropping it tears down the subscription.
@@ -286,4 +293,26 @@ pub enum SessionError {
     /// query operations on `MockZenohSession`).
     #[error("operation not yet implemented: {0}")]
     NotImplemented(&'static str),
+    /// Opening the session against the underlying Zenoh router /
+    /// peer mesh failed.
+    #[error("session open failed: {reason}")]
+    OpenFailed {
+        /// Human-readable reason from the underlying back-end.
+        reason: String,
+    },
+    /// A publish operation failed at the session layer (distinct from
+    /// a `NotAlive` rejection — the session was alive but the
+    /// underlying publish primitive returned an error).
+    #[error("publish failed: {reason}")]
+    PublishFailed {
+        /// Human-readable reason from the underlying back-end.
+        reason: String,
+    },
+    /// A declaration (`subscribe` / `declare_queryable`) failed at the
+    /// session layer.
+    #[error("declaration failed: {reason}")]
+    DeclarationFailed {
+        /// Human-readable reason from the underlying back-end.
+        reason: String,
+    },
 }

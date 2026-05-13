@@ -12,6 +12,13 @@ use sonic_connector_zenoh::{
     ZenohState,
 };
 
+/// Generic existence-proof helper. After Z4a `ZenohSessionLike` is
+/// async-in-traits (`impl Future` return types) so it is no longer
+/// dyn-safe — we use a generic bound instead of `Box<dyn ...>` to
+/// prove the trait is still nameable from public API without naming
+/// tokio.
+fn accept_session<S: ZenohSessionLike>(_session: S) {}
+
 #[test]
 fn public_surface_is_tokio_free() {
     // If any of these types pulled `tokio` into their signature,
@@ -22,13 +29,16 @@ fn public_surface_is_tokio_free() {
     let dir = ChannelDirection::Outbound;
     let state = ZenohState::new(opts);
     let session = MockZenohSession::new();
-    let state2: Box<dyn ZenohSessionLike> = Box::new(session);
+    // Generic-bound existence proof — replaces the Z3 `Box<dyn
+    // ZenohSessionLike>` form which is no longer valid after the
+    // async-in-traits refactor (Z4a).
+    accept_session(session);
 
     // Suppress clippy lints for compile-time proof variables.
     // These are not "no effect" — they're existence proofs that the public API
     // surfaces can be constructed without naming any tokio::* types.
     #[allow(clippy::no_effect_underscore_binding, clippy::used_underscore_binding)]
     {
-        let _ = (&routing, &registry, &dir, &state, &state2);
+        let _ = (&routing, &registry, &dir, &state);
     }
 }

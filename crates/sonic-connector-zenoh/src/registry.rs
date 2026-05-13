@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::Arc;
 
 use sonic_connector_core::ConnectorError;
 
@@ -70,7 +71,10 @@ impl From<QueryId> for [u8; 32] {
 /// Gateway-side outbound drain — wraps an iceoryx2 raw subscriber so
 /// the dispatcher can copy plugin-published bytes into a scratch
 /// buffer before forwarding to `session.publish`.
-pub trait OutboundDrain: Send {
+///
+/// `Send + Sync` so the dispatcher can hold the drain behind an
+/// `Arc<dyn ...>` (the snapshot pattern in `drain_outbound_once`).
+pub trait OutboundDrain: Send + Sync {
     /// Drain one envelope into `dest`. Implementations should be
     /// non-blocking — the dispatcher calls this in a tight loop.
     /// Returns `Ok(Some(n))` with the number of bytes copied;
@@ -90,7 +94,10 @@ pub trait InboundPublish: Send + Sync {
 /// Gateway-side drain for the querier's query-out path. Like
 /// [`OutboundDrain`] but also returns the envelope's `correlation_id`
 /// (= the [`QueryId`] minted by `ZenohQuerier::send`).
-pub trait QuerierDrain: Send {
+///
+/// `Send + Sync` so the dispatcher can hold the drain behind an
+/// `Arc<dyn ...>` (the snapshot pattern in `drain_outbound_once`).
+pub trait QuerierDrain: Send + Sync {
     /// Drain one query envelope into `dest`. Returns `Ok(Some((id, n)))`
     /// with the [`QueryId`] from the envelope's `correlation_id` field
     /// and the number of payload bytes copied. `Ok(None)` if no
@@ -106,7 +113,10 @@ pub trait QuerierDrain: Send {
 /// Like [`OutboundDrain`] but returns the envelope's `correlation_id`
 /// (= the [`QueryId`] the gateway minted on query-receive) so the
 /// dispatcher can look up the matching upstream `QueryReplier`.
-pub trait ReplyDrain: Send {
+///
+/// `Send + Sync` so the dispatcher can hold the drain behind an
+/// `Arc<dyn ...>` (the snapshot pattern in `drain_outbound_once`).
+pub trait ReplyDrain: Send + Sync {
     /// Drain one reply envelope into `dest`. Returns `Ok(Some((id, n)))`
     /// with the [`QueryId`] from the envelope's `correlation_id` field
     /// and the number of payload bytes copied. `Ok(None)` if no
@@ -135,14 +145,19 @@ pub trait CorrelatedPublish: Send + Sync {
 
 /// Channel ↔ iceoryx2 binding. Sealed enum opaque to user code; the
 /// dispatcher matches on the variant per dispatch tick.
+///
+/// Drain-side variants (`Outbound`, `QuerierOut`, `QueryableReplyOut`)
+/// hold their dyn trait objects behind `Arc` so the async dispatcher
+/// (Z4a) can snapshot-clone them out of the registry lock before
+/// awaiting on the session.
 pub enum ChannelBinding {
     /// Outbound — gateway drains bytes via the wrapped subscriber.
-    Outbound(Box<dyn OutboundDrain>),
+    Outbound(Arc<dyn OutboundDrain>),
     /// Inbound — gateway re-publishes bytes via the wrapped publisher.
     Inbound(Box<dyn InboundPublish>),
     /// Querier-side query-out — gateway drains (id, bytes) and feeds
     /// `session.query`.
-    QuerierOut(Box<dyn QuerierDrain>),
+    QuerierOut(Arc<dyn QuerierDrain>),
     /// Querier-side reply-in — gateway publishes framed reply chunks
     /// keyed by [`QueryId`].
     QuerierReplyIn(Box<dyn CorrelatedPublish>),
@@ -151,7 +166,7 @@ pub enum ChannelBinding {
     QueryableQueryIn(Box<dyn CorrelatedPublish>),
     /// Queryable-side reply-out — gateway drains (id, framed bytes)
     /// and forwards via the upstream `QueryReplier`.
-    QueryableReplyOut(Box<dyn ReplyDrain>),
+    QueryableReplyOut(Arc<dyn ReplyDrain>),
 }
 
 impl fmt::Debug for ChannelBinding {

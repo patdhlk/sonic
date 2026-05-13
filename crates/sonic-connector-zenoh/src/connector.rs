@@ -304,10 +304,12 @@ where
         let writer = factory.create_writer::<T, _, _, N>(&plugin_desc, self.codec.clone())?;
 
         // Gateway-side raw subscriber — drains plugin's publishes into
-        // `session.publish` on each dispatcher tick.
+        // `session.publish` on each dispatcher tick. Held behind `Arc`
+        // (Z4a) so the async dispatcher can snapshot-clone the drain
+        // out of the registry lock before awaiting on the session.
         let raw_reader = factory.create_raw_reader_named::<N>(&svc_name)?;
-        let drain: Box<dyn crate::registry::OutboundDrain> =
-            Box::new(IoxOutboundDrain::<N>::new(raw_reader));
+        let drain: Arc<dyn crate::registry::OutboundDrain> =
+            Arc::new(IoxOutboundDrain::<N>::new(raw_reader));
 
         self.state
             .registry()
@@ -348,22 +350,39 @@ where
         // Wire the session subscriber: bytes from Zenoh arrive in the
         // callback and are forwarded to the iox raw publisher.
         //
-        // TODO(Z4): track the returned `SubscriptionHandle` rather than
-        // leaking it; Z4 adds explicit channel lifecycle management.
+        // TODO(Z4d): track the returned `SubscriptionHandle` rather than
+        // leaking it; Z4d adds explicit channel lifecycle management.
         let sink: crate::session::PayloadSink = Box::new(move |bytes: &[u8]| {
             let _ = inbound_for_callback.publish_bytes(bytes);
         });
 
-        let sub_handle = self
-            .session_slot
-            .lock()
-            .expect("session slot mutex not poisoned")
-            .as_ref()
-            .ok_or_else(|| ConnectorError::stack(SessionAlreadyTaken))?
-            .subscribe(&routing, sink)
-            .map_err(|e| ConnectorError::stack(SessionFailure(format!("{e}"))))?;
+        // Z4a: `subscribe` is async. Snapshot the session out of the
+        // slot, drop the std::sync::Mutex guard, then bridge to the
+        // gateway's tokio runtime via `Handle::block_on`. CRITICAL:
+        // the guard MUST NOT be held across the block_on call — std
+        // Mutexes cannot be held across `.await`s, and `block_on`
+        // counts.
+        let sub_handle = {
+            let session = {
+                let guard = self
+                    .session_slot
+                    .lock()
+                    .expect("session slot mutex not poisoned");
+                guard
+                    .as_ref()
+                    .ok_or_else(|| ConnectorError::stack(SessionAlreadyTaken))?
+                    .clone()
+            };
+            let handle = self
+                .gateway
+                .handle()
+                .ok_or_else(|| ConnectorError::stack(GatewayShutDown))?;
+            handle
+                .block_on(session.subscribe(&routing, sink))
+                .map_err(|e| ConnectorError::stack(SessionFailure(format!("{e}"))))?
+        };
         // Intentionally leak the handle for the lifetime of the
-        // connector; lifecycle cleanup is deferred to Z4.
+        // connector; lifecycle cleanup is deferred to Z4d.
         Box::leak(Box::new(sub_handle));
 
         self.state
@@ -455,8 +474,8 @@ where
         let q_reader_gw = factory.create_raw_reader_named::<N>(&q_name)?;
         let r_writer_gw = factory.create_raw_writer_named::<N>(&r_name)?;
 
-        let q_drain: Box<dyn QuerierDrain> =
-            Box::new(IoxQuerierDrain::<N>::new(q_reader_gw));
+        let q_drain: Arc<dyn QuerierDrain> =
+            Arc::new(IoxQuerierDrain::<N>::new(q_reader_gw));
 
         // Wrap the `.reply.in` publisher in an `Arc` so the registry
         // binding and the sidecar map can share it. The dispatcher's
@@ -548,8 +567,8 @@ where
         let q_publish: Arc<IoxCorrelatedPublish<N>> =
             Arc::new(IoxCorrelatedPublish::<N>::new(q_writer_gw));
         let q_publish_for_callback = Arc::clone(&q_publish);
-        let r_drain: Box<dyn ReplyDrain> =
-            Box::new(IoxReplyDrain::<N>::new(r_reader_gw));
+        let r_drain: Arc<dyn ReplyDrain> =
+            Arc::new(IoxReplyDrain::<N>::new(r_reader_gw));
 
         // Wire the session's declare_queryable callback. On each
         // upstream query: mint a QueryId, stash the replier in the
@@ -575,19 +594,35 @@ where
 
         // Subscribe with the session. The session is consumed by
         // register_with — if it's already gone, we can't declare.
-        let qable_handle = self
-            .session_slot
-            .lock()
-            .expect("session slot mutex not poisoned")
-            .as_ref()
-            .ok_or_else(|| ConnectorError::stack(SessionAlreadyTaken))?
-            .declare_queryable(&routing, on_query)
-            .map_err(|e| {
-                ConnectorError::stack(SessionFailure(format!("declare_queryable: {e}")))
-            })?;
-        // TODO(Z4): refine queryable lifecycle. Z3 leaks the handle
-        // for the connector lifetime, mirroring how create_reader
-        // leaks the SubscriptionHandle.
+        //
+        // Z4a: `declare_queryable` is async. Same `block_on` bridge
+        // pattern as `create_reader` — snapshot the session out of
+        // the slot under the std::sync::Mutex guard, drop the guard,
+        // then `block_on` on the gateway runtime.
+        let qable_handle = {
+            let session = {
+                let guard = self
+                    .session_slot
+                    .lock()
+                    .expect("session slot mutex not poisoned");
+                guard
+                    .as_ref()
+                    .ok_or_else(|| ConnectorError::stack(SessionAlreadyTaken))?
+                    .clone()
+            };
+            let handle = self
+                .gateway
+                .handle()
+                .ok_or_else(|| ConnectorError::stack(GatewayShutDown))?;
+            handle
+                .block_on(session.declare_queryable(&routing, on_query))
+                .map_err(|e| {
+                    ConnectorError::stack(SessionFailure(format!("declare_queryable: {e}")))
+                })?
+        };
+        // TODO(Z4d): refine queryable lifecycle. Z4a still leaks the
+        // handle for the connector lifetime, mirroring how
+        // create_reader leaks the SubscriptionHandle.
         Box::leak(Box::new(qable_handle));
 
         {
