@@ -18,6 +18,17 @@ use crate::channel::{ChannelReader, ChannelWriter};
 use crate::envelope::ConnectorEnvelope;
 use crate::raw::{RawChannelReader, RawChannelWriter};
 
+/// Per-subscriber queue depth for every pub/sub service opened via this
+/// factory. iceoryx2's built-in default is 2 — too small to absorb
+/// realistic bursts (e.g., a queryable replying 3+ times before the
+/// gateway dispatcher's next tick). Setting a uniform, generous depth
+/// here keeps the transport robust to in-flight bursts without
+/// requiring every caller to thread a configuration value through.
+/// 64 is intentionally conservative — it's ~33 KiB per channel at
+/// `N = 512`, which is well below any plausible memory budget but
+/// large enough to span many dispatcher ticks.
+const SUBSCRIBER_MAX_BUFFER_SIZE: usize = 64;
+
 /// Wraps an iceoryx2 [`Node`] and opens pub/sub services on demand.
 ///
 /// `ServiceFactory` borrows the node — the caller owns the node and is
@@ -123,6 +134,7 @@ impl<'n> ServiceFactory<'n> {
         self.node
             .service_builder(&service_name)
             .publish_subscribe::<ConnectorEnvelope<N>>()
+            .subscriber_max_buffer_size(SUBSCRIBER_MAX_BUFFER_SIZE)
             .open_or_create()
             .map_err(|e| ConnectorError::stack(svc_error(format!("open_or_create: {e:?}"))))
     }
