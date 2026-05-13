@@ -12,7 +12,7 @@
 //! Covers `REQ_0445`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -59,6 +59,11 @@ pub struct MockZenohSession {
     next_sub_id: AtomicU64,
     queryables: QueryableMap,
     next_qable_id: AtomicU64,
+    /// Test-only knob (`set_query_hangs`). When `true`, `query`
+    /// short-circuits to `Ok(())` without invoking any subscriber /
+    /// `on_done` callback — used to exercise the gateway's
+    /// `tokio::time::timeout` enforcement path (`TEST_0307`).
+    query_hangs: AtomicBool,
 }
 
 impl std::fmt::Debug for MockZenohSession {
@@ -88,6 +93,7 @@ impl MockZenohSession {
             next_sub_id: AtomicU64::new(1),
             queryables: Arc::new(Mutex::new(HashMap::new())),
             next_qable_id: AtomicU64::new(1),
+            query_hangs: AtomicBool::new(false),
         }
     }
 
@@ -100,6 +106,18 @@ impl MockZenohSession {
     /// a previous thread panicked while holding the write lock).
     pub fn set_state(&self, state: SessionState) {
         *self.state.write().unwrap() = state;
+    }
+
+    /// Test-only knob: when `true`, `query` succeeds at the entry point
+    /// but never invokes its callbacks. Used to exercise the gateway's
+    /// `tokio::time::timeout` enforcement path against
+    /// `MockZenohSession` (`TEST_0307`).
+    ///
+    /// Intentionally NOT `cfg(test)`-gated — the mock ships always per
+    /// `REQ_0445`; feature-gating this method would force feature-flag
+    /// complexity onto downstream test crates.
+    pub fn set_query_hangs(&self, hang: bool) {
+        self.query_hangs.store(hang, Ordering::Release);
     }
 
     fn subscriber_count(&self) -> usize {
@@ -237,6 +255,21 @@ impl ZenohSessionLike for MockZenohSession {
             return Err(SessionError::NotAlive {
                 reason: "mock session not alive".into(),
             });
+        }
+
+        // Test-only: never resolve the future and never invoke
+        // callbacks so the gateway's `tokio::time::timeout` wrapper
+        // actually has something to time out on (`TEST_0307`). A bare
+        // `return Ok(())` would let the timeout see a resolved future
+        // and never fire.
+        if self.query_hangs.load(Ordering::Acquire) {
+            // `on_reply` and `on_done` deliberately dropped here.
+            let _ = on_reply;
+            let _ = on_done;
+            let _ = payload;
+            let _ = routing;
+            std::future::pending::<()>().await;
+            unreachable!("std::future::pending() never resolves");
         }
 
         // Snapshot the matching queryables under the lock, then release

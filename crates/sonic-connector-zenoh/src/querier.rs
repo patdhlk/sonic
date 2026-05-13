@@ -88,6 +88,13 @@ where
     writer: RawChannelWriter<N>,
     reader: RawChannelReader<N>,
     codec: C,
+    /// Cached default timeout from `ZenohConnectorOptions::query_timeout`.
+    /// Z4c plumbs the per-call timeout through the envelope's `reserved`
+    /// word and the gateway resolves `reserved == 0` to its own copy of
+    /// this value, so the plugin no longer reads it on the hot path.
+    /// Retained on the struct for diagnostics / future use (e.g. when a
+    /// querier-side preflight check needs the configured default).
+    #[allow(dead_code)]
     default_timeout: Duration,
     scratch: Vec<u8>,
     _ty: PhantomData<fn() -> (Q, R)>,
@@ -117,41 +124,53 @@ where
         }
     }
 
-    /// Issue a query against the configured key expression with the
-    /// connector's default timeout. Returns the freshly minted
-    /// [`QueryId`].
+    /// Issue a query against the configured key expression. Returns
+    /// the freshly minted [`QueryId`].
+    ///
+    /// The envelope's `reserved` header word is stamped with `0`,
+    /// telling the gateway to fall back to the connector's default
+    /// `query_timeout` (`REQ_0425`). Use [`Self::send_with_timeout`]
+    /// for per-call overrides.
     ///
     /// # Errors
     /// Returns [`ConnectorError::Codec`] on encode failure;
     /// [`ConnectorError::PayloadOverflow`] if the encoded `Q` exceeds
     /// `N`; [`ConnectorError::Stack`] for iox failures.
     pub fn send(&mut self, q: &Q) -> Result<QueryId, ConnectorError> {
-        self.send_inner(q, self.default_timeout)
+        // `Duration::ZERO` -> `reserved = 0` -> gateway uses default.
+        self.send_inner(q, Duration::ZERO)
     }
 
-    /// Like [`Self::send`] but with a per-call timeout override
-    /// (`REQ_0425`). The timeout is honoured by the gateway, not by
-    /// the plugin — this method just stamps it on the outgoing
-    /// envelope for the gateway to read. Z3's first cut uses the
-    /// connector's default timeout for ALL queriers; the per-call
-    /// override is wired in Z4 alongside the real session integration.
+    /// Issue a query with a per-call timeout override (`REQ_0425`).
+    /// The timeout in milliseconds is stamped into the envelope's
+    /// `reserved` header word; the gateway reads it and uses
+    /// `tokio::time::timeout` to enforce expiry, emitting a synthetic
+    /// `[0x03]` (`FrameKind::Timeout`) frame on the reply path when
+    /// the budget elapses.
+    ///
+    /// Pass `Duration::ZERO` (or just use [`Self::send`]) to fall back
+    /// to the connector's default `query_timeout`.
+    ///
+    /// # Errors
+    /// Returns [`ConnectorError::Codec`] on encode failure;
+    /// [`ConnectorError::PayloadOverflow`] if the encoded `Q` exceeds
+    /// `N`; [`ConnectorError::Stack`] for iox failures.
     pub fn send_with_timeout(
         &mut self,
         q: &Q,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<QueryId, ConnectorError> {
-        // Z3: timeout is not yet wire-propagated per query. Uses
-        // default for now. Z4 will plumb the timeout through the
-        // envelope's reserved header word or via a sidecar metadata
-        // channel.
-        self.send_inner(q, self.default_timeout)
+        self.send_inner(q, timeout)
     }
 
-    fn send_inner(&mut self, q: &Q, _timeout: Duration) -> Result<QueryId, ConnectorError> {
+    fn send_inner(&mut self, q: &Q, timeout: Duration) -> Result<QueryId, ConnectorError> {
         let id = mint_query_id();
         let written = self.codec.encode(q, &mut self.scratch)?;
+        // Saturate at `u32::MAX` ms (~49.7 days) — anything that
+        // overflows is clamped rather than silently wrapping.
+        let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         self.writer
-            .send_raw_bytes(&self.scratch[..written], id.0)?;
+            .send_raw_bytes_v2(&self.scratch[..written], id.0, timeout_ms)?;
         Ok(id)
     }
 

@@ -169,7 +169,7 @@ impl QuerierDrain for NullQuerierDrain {
     fn drain_query(
         &self,
         _dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+    ) -> Result<Option<(QueryId, usize, u32)>, ConnectorError> {
         Ok(None)
     }
 }

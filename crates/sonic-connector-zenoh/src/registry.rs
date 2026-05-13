@@ -91,21 +91,26 @@ pub trait InboundPublish: Send + Sync {
     fn publish_bytes(&self, bytes: &[u8]) -> Result<(), ConnectorError>;
 }
 
-/// Gateway-side drain for the querier's query-out path. Like
-/// [`OutboundDrain`] but also returns the envelope's `correlation_id`
-/// (= the [`QueryId`] minted by `ZenohQuerier::send`).
+/// Gateway-side drain for the querier's query-out path.
+///
+/// Like [`OutboundDrain`] but also returns the envelope's
+/// `correlation_id` (= the [`QueryId`] minted by `ZenohQuerier::send`)
+/// and the envelope's `reserved` header word (per-call timeout
+/// override in milliseconds; `0` = use connector default).
 ///
 /// `Send + Sync` so the dispatcher can hold the drain behind an
 /// `Arc<dyn ...>` (the snapshot pattern in `drain_outbound_once`).
 pub trait QuerierDrain: Send + Sync {
-    /// Drain one query envelope into `dest`. Returns `Ok(Some((id, n)))`
-    /// with the [`QueryId`] from the envelope's `correlation_id` field
-    /// and the number of payload bytes copied. `Ok(None)` if no
-    /// envelope was pending.
+    /// Drain one query envelope into `dest`. Returns
+    /// `Ok(Some((id, n, reserved)))` with the [`QueryId`] from the
+    /// envelope's `correlation_id`, the number of payload bytes copied,
+    /// and the envelope's `reserved` header word (`0` = use connector
+    /// default; non-zero = per-call timeout in milliseconds —
+    /// `REQ_0425`). `Ok(None)` if no envelope was pending.
     fn drain_query(
         &self,
         dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError>;
+    ) -> Result<Option<(QueryId, usize, u32)>, ConnectorError>;
 }
 
 /// Gateway-side drain for the queryable's reply-out path.

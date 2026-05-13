@@ -145,13 +145,13 @@ pub async fn dispatcher_loop<S>(
     query_timeout: Duration,
 ) -> Result<(), ConnectorError>
 where
-    S: ZenohSessionLike + ?Sized,
+    S: ZenohSessionLike + 'static,
 {
     let mut scratch = vec![0u8; MAX_DRAIN_SCRATCH];
     while !stop.load(Ordering::Acquire) {
         drain_outbound_once(
             &registry,
-            session.as_ref(),
+            &session,
             &mut scratch,
             &correlation_map,
             &query_reply_publishers,
@@ -207,13 +207,13 @@ impl RegistrySnapshot {
 #[allow(clippy::too_many_arguments)] // each arg is inherent to the dispatcher's responsibilities.
 async fn drain_outbound_once<S>(
     registry: &Mutex<ChannelRegistry>,
-    session: &S,
+    session: &Arc<S>,
     scratch: &mut [u8],
     correlation_map: &CorrelationMap,
     query_reply_publishers: &QueryReplyPublishers,
     query_timeout: Duration,
 ) where
-    S: ZenohSessionLike + ?Sized,
+    S: ZenohSessionLike + 'static,
 {
     // Snapshot the registry under the lock, then iterate lock-free.
     // This is mandatory after Z4a: holding `MutexGuard<ChannelRegistry>`
@@ -235,7 +235,14 @@ async fn drain_outbound_once<S>(
                 }
             }
             BindingSnapshot::QuerierOut(drain) => {
-                while let Ok(Some((id, n))) = drain.drain_query(scratch) {
+                while let Ok(Some((id, n, reserved))) = drain.drain_query(scratch) {
+                    // Resolve the effective timeout: `reserved == 0`
+                    // means "use the connector default" (REQ_0425).
+                    let effective_timeout = if reserved == 0 {
+                        query_timeout
+                    } else {
+                        Duration::from_millis(u64::from(reserved))
+                    };
                     // Look up the matching `.reply.in` publisher in
                     // the sidecar map; release the lock immediately so
                     // the inner publish path doesn't hold it.
@@ -250,27 +257,14 @@ async fn drain_outbound_once<S>(
                         // (the plugin will time out anyway).
                         continue;
                     };
-                    let payload = scratch[..n].to_vec();
-                    let pub_reply = Arc::clone(&publisher);
-                    let pub_done = Arc::clone(&publisher);
-                    let on_reply: PayloadSink = Box::new(move |bytes: &[u8]| {
-                        let mut framed = Vec::with_capacity(1 + bytes.len());
-                        framed.push(crate::session::FrameKind::Data.discriminator());
-                        framed.extend_from_slice(bytes);
-                        let _ = pub_reply.publish_with_correlation(id, &framed);
-                    });
-                    let on_done: DoneCallback = Box::new(move || {
-                        let _ = pub_done.publish_with_correlation(
-                            id,
-                            &[crate::session::FrameKind::EndOfStream.discriminator()],
-                        );
-                    });
-                    // For Z4a we keep the timeout pass-through but do
-                    // NOT wrap in `tokio::time::timeout` — that is
-                    // Z4c's job (spawned timeout task with `Arc<S>`).
-                    let _ = session
-                        .query(&entry.routing, &payload, query_timeout, on_reply, on_done)
-                        .await;
+                    spawn_query_with_timeout(
+                        Arc::clone(session),
+                        entry.routing.clone(),
+                        scratch[..n].to_vec(),
+                        id,
+                        effective_timeout,
+                        publisher,
+                    );
                 }
             }
             BindingSnapshot::QueryableReplyOut(drain) => {
@@ -317,6 +311,66 @@ async fn drain_outbound_once<S>(
     }
 }
 
+/// Spawn one upstream `session.query` wrapped in `tokio::time::timeout`.
+///
+/// The dispatcher uses this helper for every plugin-issued query so it
+/// can move on to drain the next entry without blocking — the timeout
+/// must still fire even if `session.query` never resolves (e.g. real
+/// zenoh sends out the query but no peer replies; `REQ_0425` /
+/// `TEST_0307`).
+///
+/// On timeout expiry, a synthetic `[0x03]` (`FrameKind::Timeout`)
+/// frame is published on the matching `.reply.in` channel so the
+/// querier observes `QuerierEvent::Timeout`.
+fn spawn_query_with_timeout<S>(
+    session: Arc<S>,
+    routing: crate::routing::ZenohRouting,
+    payload: Vec<u8>,
+    id: QueryId,
+    effective_timeout: Duration,
+    publisher: Arc<dyn CorrelatedPublish>,
+) where
+    S: ZenohSessionLike + 'static,
+{
+    let pub_reply = Arc::clone(&publisher);
+    let pub_done = Arc::clone(&publisher);
+    // The third use moves the Arc into the spawned future — keeps
+    // clippy::needless_pass_by_value happy and avoids one needless
+    // clone on the hot path.
+    let publisher_for_timeout = publisher;
+    tokio::spawn(async move {
+        let on_reply: PayloadSink = Box::new(move |bytes: &[u8]| {
+            let mut framed = Vec::with_capacity(1 + bytes.len());
+            framed.push(crate::session::FrameKind::Data.discriminator());
+            framed.extend_from_slice(bytes);
+            let _ = pub_reply.publish_with_correlation(id, &framed);
+        });
+        let on_done: DoneCallback = Box::new(move || {
+            let _ = pub_done.publish_with_correlation(
+                id,
+                &[crate::session::FrameKind::EndOfStream.discriminator()],
+            );
+        });
+        let query_fut =
+            session.query(&routing, &payload, effective_timeout, on_reply, on_done);
+        match tokio::time::timeout(effective_timeout, query_fut).await {
+            Ok(_inner) => {
+                // session.query completed (its callbacks already
+                // fired). Z4h adds tracing for inner errors.
+            }
+            Err(_elapsed) => {
+                // Timeout fired before session.query completed — emit
+                // the synthetic 0x03 terminator on the reply path so
+                // the querier sees `QuerierEvent::Timeout` (TEST_0307).
+                let _ = publisher_for_timeout.publish_with_correlation(
+                    id,
+                    &[crate::session::FrameKind::Timeout.discriminator()],
+                );
+            }
+        }
+    });
+}
+
 /// iox-backed [`QuerierDrain`]. Drains envelopes from `.query.out`,
 /// returning `(QueryId, payload_len)`.
 ///
@@ -340,7 +394,7 @@ impl<const N: usize> QuerierDrain for IoxQuerierDrain<N> {
     fn drain_query(
         &self,
         dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+    ) -> Result<Option<(QueryId, usize, u32)>, ConnectorError> {
         let sample_opt = {
             let reader = self.reader.lock().expect("querier drain mutex poisoned");
             reader.try_recv_into(dest)?
@@ -348,7 +402,11 @@ impl<const N: usize> QuerierDrain for IoxQuerierDrain<N> {
         let Some(sample) = sample_opt else {
             return Ok(None);
         };
-        Ok(Some((QueryId(sample.correlation_id), sample.payload_len)))
+        Ok(Some((
+            QueryId(sample.correlation_id),
+            sample.payload_len,
+            sample.reserved,
+        )))
     }
 }
 
