@@ -12,7 +12,6 @@ state, with the convention:
 
 * ``implemented`` — current code satisfies (references concrete FEAT/REQ/BB IDs).
 * ``draft`` — requires extension to existing crate (gap analysis pending).
-* ``new`` — requires new component (subject of follow-on implementation plan).
 
 .. tsr:: Bounded allocator hard caps
    :id: TSR_0001
@@ -164,6 +163,12 @@ TSR coverage summary
 * 5 ``implemented`` — TSR_0001, TSR_0004, TSR_0005, TSR_0006, TSR_0007.
 * 2 ``draft`` (extension to existing crate) — TSR_0002, TSR_0008.
 * 3 ``draft`` (new component) — TSR_0003, TSR_0009, TSR_0010.
+
+**AFSR coverage.** This batch refines AFSR_0001..AFSR_0004 onto 10 TSRs.
+AFSR_0005 (startup integrity verification) is intentionally deferred to
+the follow-on implementation plan that owns TSR_0003 (process
+isolation), since startup verification is the natural admission-time
+companion to the process-isolation invariant.
 
 The five ``draft`` TSRs are the substance of the context-based isolation
 work item and are the subject of a follow-on sonic implementation plan.
