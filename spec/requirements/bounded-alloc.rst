@@ -104,3 +104,18 @@ Requirements
    compare-exchange-based allocation; the counters shall use
    appropriate atomic ordering; the lock flag shall use Acquire on
    read and Release on write.
+
+Safety refinements
+------------------
+
+The bounded allocator implements safety obligations :need:`TSR_0001`
+and :need:`TSR_0002` derived from the SEooC safety concept (see
+:doc:`../safety/tsc`).
+
+* :need:`TSR_0001` (hard caps on per-allocation size and total live
+  blocks) is **implemented** today by :need:`FEAT_0040`.
+
+* :need:`TSR_0002` (partitioned per-integrity-level quota pools) is
+  **draft** — requires extending the public API to take an
+  integrity-level argument at the allocator-init macro. See
+  :need:`ADR_0051` for the architectural rationale.
