@@ -14,7 +14,12 @@
     "type-architecture":   { "properties": { "type": { "const": "architecture" } } },
     "type-risk":           { "properties": { "type": { "const": "risk" } } },
     "type-term":           { "properties": { "type": { "const": "term" } } },
-    "status-implemented":  { "properties": { "status": { "const": "implemented" } } }
+    "status-implemented":  { "properties": { "status": { "const": "implemented" } } },
+    "type-assumed-hazard":      { "properties": { "type": { "const": "assumed-hazard" } } },
+    "type-assumed-safety-goal": { "properties": { "type": { "const": "assumed-safety-goal" } } },
+    "type-assumed-fsr":         { "properties": { "type": { "const": "assumed-fsr" } } },
+    "type-tsr":                 { "properties": { "type": { "const": "tsr" } } },
+    "type-aou":                 { "properties": { "type": { "const": "aou" } } }
   },
 
   "schemas": [
@@ -89,6 +94,36 @@
       "message": "term (glossary) ID must match ^GLOSS_\\d{4}$",
       "select": { "$ref": "#/$defs/type-term" },
       "validate": { "local": { "properties": { "id": { "pattern": "^GLOSS_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-assumed-hazard",
+      "message": "assumed-hazard ID must match ^AHZ_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-assumed-hazard" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^AHZ_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-assumed-safety-goal",
+      "message": "assumed-safety-goal ID must match ^ASG_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-assumed-safety-goal" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^ASG_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-assumed-fsr",
+      "message": "assumed-fsr ID must match ^AFSR_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-assumed-fsr" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^AFSR_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-tsr",
+      "message": "tsr ID must match ^TSR_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-tsr" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^TSR_\\d{4}$" } }, "required": ["id"] } }
+    },
+    {
+      "id": "id-aou",
+      "message": "aou ID must match ^AOU_\\d{4}$",
+      "select": { "$ref": "#/$defs/type-aou" },
+      "validate": { "local": { "properties": { "id": { "pattern": "^AOU_\\d{4}$" } }, "required": ["id"] } }
     },
 
     {
