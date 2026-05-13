@@ -1,22 +1,25 @@
 //! In-process [`ZenohSessionLike`] implementation for Layer-1 tests.
 //!
 //! [`MockZenohSession`] carries a per-key-expression subscriber registry
-//! and a settable [`SessionState`]. Publishes are dispatched synchronously
-//! to every matching subscriber (key-expression match in Z1 is exact
-//! string equality — wildcard matching lands later if a test needs it).
-//! Query / queryable operations stub out as `NotImplemented` until Z3.
+//! and a parallel queryable registry, plus a settable [`SessionState`].
+//! Publishes are dispatched synchronously to every matching subscriber
+//! (key-expression match here is exact string equality — wildcard
+//! matching lands later if a test needs it). Queries are dispatched
+//! synchronously to every matching queryable; the mock does NOT enforce
+//! the `timeout` parameter (that is the gateway's responsibility per
+//! `REQ_0425`).
 //!
 //! Covers `REQ_0445`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crate::routing::ZenohRouting;
 use crate::session::{
-    DoneCallback, PayloadSink, QuerySink, QueryableHandle, SessionError, SessionState,
-    SubscriptionHandle, ZenohSessionLike,
+    DoneCallback, PayloadSink, QueryReplier, QuerySink, QueryableHandle, SessionError,
+    SessionState, SubscriptionHandle, ZenohSessionLike,
 };
 
 /// Shared-ownership sink stored per subscriber entry. Using `Arc` (rather
@@ -31,12 +34,31 @@ struct SubscriberEntry {
 
 type SubscriberMap = Arc<Mutex<HashMap<String, Vec<SubscriberEntry>>>>;
 
-/// In-process mock session. Pub/sub round-trips through an internal
-/// registry; query operations are Z1 stubs.
+/// Shared-ownership sink stored per queryable entry. Mirrors `SharedSink`
+/// for the queryable registry side.
+type QueryableSink = Arc<dyn Fn(&[u8], QueryReplier) + Send + Sync + 'static>;
+
+struct QueryableEntry {
+    id: u64,
+    sink: QueryableSink,
+}
+
+type QueryableMap = Arc<Mutex<HashMap<String, Vec<QueryableEntry>>>>;
+
+/// Shared cell holding the caller's `on_done` callback until the last
+/// queryable to terminate fires it. `FnOnce` can't be cloned, so the
+/// `Mutex<Option<...>>` cell lets exactly one terminate path take and
+/// invoke the callback.
+type DoneCell = Arc<Mutex<Option<DoneCallback>>>;
+
+/// In-process mock session. Pub/sub and query round-trip through internal
+/// registries; `timeout` is not enforced (gateway-layer concern).
 pub struct MockZenohSession {
     state: RwLock<SessionState>,
     subscribers: SubscriberMap,
     next_sub_id: AtomicU64,
+    queryables: QueryableMap,
+    next_qable_id: AtomicU64,
 }
 
 impl std::fmt::Debug for MockZenohSession {
@@ -45,6 +67,7 @@ impl std::fmt::Debug for MockZenohSession {
         f.debug_struct("MockZenohSession")
             .field("state", &state)
             .field("subscriber_count", &self.subscriber_count())
+            .field("queryable_count", &self.queryable_count())
             .finish_non_exhaustive()
     }
 }
@@ -63,6 +86,8 @@ impl MockZenohSession {
             state: RwLock::new(SessionState::Alive),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             next_sub_id: AtomicU64::new(1),
+            queryables: Arc::new(Mutex::new(HashMap::new())),
+            next_qable_id: AtomicU64::new(1),
         }
     }
 
@@ -85,6 +110,15 @@ impl MockZenohSession {
             .map(Vec::len)
             .sum()
     }
+
+    fn queryable_count(&self) -> usize {
+        self.queryables
+            .lock()
+            .unwrap()
+            .values()
+            .map(Vec::len)
+            .sum()
+    }
 }
 
 /// Drop guard returned inside [`SubscriptionHandle`]. Removing it from
@@ -98,6 +132,27 @@ struct SubscriptionGuard {
 impl Drop for SubscriptionGuard {
     fn drop(&mut self) {
         if let Ok(mut map) = self.subscribers.lock() {
+            if let Some(entries) = map.get_mut(&self.key) {
+                entries.retain(|e| e.id != self.id);
+                if entries.is_empty() {
+                    map.remove(&self.key);
+                }
+            }
+        }
+    }
+}
+
+/// Drop guard returned inside [`QueryableHandle`]. Removing it from the
+/// registry on drop tears down the queryable.
+struct QueryableGuard {
+    id: u64,
+    key: String,
+    queryables: QueryableMap,
+}
+
+impl Drop for QueryableGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.queryables.lock() {
             if let Some(entries) = map.get_mut(&self.key) {
                 entries.retain(|e| e.id != self.id);
                 if entries.is_empty() {
@@ -168,22 +223,97 @@ impl ZenohSessionLike for MockZenohSession {
 
     fn query(
         &self,
-        _routing: &ZenohRouting,
-        _payload: &[u8],
+        routing: &ZenohRouting,
+        payload: &[u8],
         _timeout: Duration,
-        _on_reply: PayloadSink,
-        _on_done: DoneCallback,
+        on_reply: PayloadSink,
+        on_done: DoneCallback,
     ) -> Result<(), SessionError> {
-        Err(SessionError::NotImplemented("MockZenohSession::query (Z3)"))
+        if !matches!(*self.state.read().unwrap(), SessionState::Alive) {
+            return Err(SessionError::NotAlive {
+                reason: "mock session not alive".into(),
+            });
+        }
+
+        // Snapshot the matching queryables under the lock, then release
+        // the lock before invoking any user-supplied callback.
+        let key = routing.key_expr().as_str().to_owned();
+        let queryables: Vec<QueryableSink> = self
+            .queryables
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|entries| entries.iter().map(|e| Arc::clone(&e.sink)).collect())
+            .unwrap_or_default();
+
+        // No queryables matched — fire `on_done` immediately. We do NOT
+        // invoke `on_reply` in this path.
+        if queryables.is_empty() {
+            (on_done)();
+            return Ok(());
+        }
+
+        // Multiple queryables share the same caller-supplied callbacks.
+        // `on_reply` is wrapped in an `Arc<dyn Fn>` so each replier can
+        // hold its own clone; `on_done` is `FnOnce`, so it sits in a
+        // shared cell and the LAST queryable to terminate fires it.
+        let on_reply_arc: SharedSink = Arc::from(on_reply);
+        let on_done_cell: DoneCell = Arc::new(Mutex::new(Some(on_done)));
+        let pending = Arc::new(AtomicUsize::new(queryables.len()));
+
+        for sink in &queryables {
+            let on_reply_clone = Arc::clone(&on_reply_arc);
+            let done_cell_clone = Arc::clone(&on_done_cell);
+            let pending_clone = Arc::clone(&pending);
+
+            let replier = QueryReplier {
+                reply: Box::new(move |body: &[u8]| {
+                    (on_reply_clone)(body);
+                }),
+                terminate: Box::new(move || {
+                    // `fetch_sub` returns the previous value; when the
+                    // previous value was 1, this terminate is the last
+                    // one and should fire `on_done`.
+                    let remaining = pending_clone.fetch_sub(1, Ordering::AcqRel);
+                    if remaining == 1 {
+                        // Hoist the `take()` so the temporary MutexGuard
+                        // drops before we invoke the callback.
+                        let cb = done_cell_clone.lock().unwrap().take();
+                        if let Some(cb) = cb {
+                            (cb)();
+                        }
+                    }
+                }),
+            };
+            sink(payload, replier);
+        }
+
+        Ok(())
     }
 
     fn declare_queryable(
         &self,
-        _routing: &ZenohRouting,
-        _on_query: QuerySink,
+        routing: &ZenohRouting,
+        on_query: QuerySink,
     ) -> Result<QueryableHandle, SessionError> {
-        Err(SessionError::NotImplemented(
-            "MockZenohSession::declare_queryable (Z3)",
-        ))
+        let key = routing.key_expr().as_str().to_owned();
+        let id = self.next_qable_id.fetch_add(1, Ordering::Relaxed);
+        // Convert the caller's Box<dyn Fn> into an Arc<dyn Fn> so the
+        // sink can be cheaply cloned during query dispatch.
+        let shared: QueryableSink = Arc::from(on_query);
+        let entry = QueryableEntry { id, sink: shared };
+        self.queryables
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .push(entry);
+
+        let guard = QueryableGuard {
+            id,
+            key,
+            queryables: Arc::clone(&self.queryables),
+        };
+        Ok(QueryableHandle(Box::new(guard)))
     }
 }

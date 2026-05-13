@@ -34,6 +34,6 @@ pub use routing::{
     CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
 };
 pub use session::{
-    DoneCallback, FrameKind, PayloadSink, QuerySink, ReplyFrame, SessionError, SessionState,
-    ZenohSessionLike,
+    DoneCallback, FrameKind, PayloadSink, QueryReplier, QuerySink, ReplyFrame, SessionError,
+    SessionState, ZenohSessionLike,
 };

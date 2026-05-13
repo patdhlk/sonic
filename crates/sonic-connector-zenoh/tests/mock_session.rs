@@ -2,11 +2,9 @@
 //! used by Layer-1 unit tests (`REQ_0445`).
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use sonic_connector_zenoh::{
-    DoneCallback, KeyExprOwned, MockZenohSession, PayloadSink, SessionState, ZenohRouting,
-    ZenohSessionLike,
+    KeyExprOwned, MockZenohSession, PayloadSink, SessionState, ZenohRouting, ZenohSessionLike,
 };
 
 fn routing(key: &str) -> ZenohRouting {
@@ -131,15 +129,166 @@ fn publish_returns_not_alive_when_closed() {
 }
 
 #[test]
-fn query_returns_not_implemented_in_z1() {
-    // Z3 lands query support. Z1 stubs return `NotImplemented` so tests
-    // that assert "no query in Z1" can pin the failure mode.
+fn query_round_trip_to_single_queryable() {
+    use std::sync::{Arc, Mutex};
+
     let session = MockZenohSession::new();
     let r = routing("robot/arm/joint1");
-    let on_reply: PayloadSink = Box::new(|_| {});
-    let on_done: DoneCallback = Box::new(|| {});
+
+    // Declare a queryable that replies with "hello" + the request bytes.
+    let _qable = session
+        .declare_queryable(
+            &r,
+            Box::new(|req: &[u8], replier: sonic_connector_zenoh::session::QueryReplier| {
+                let mut out = b"hello,".to_vec();
+                out.extend_from_slice(req);
+                replier.reply(&out);
+                replier.terminate();
+            }),
+        )
+        .expect("queryable declared");
+
+    let replies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let replies_clone = replies.clone();
+    let done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let done_clone = done.clone();
+
+    session
+        .query(
+            &r,
+            b" world",
+            std::time::Duration::from_secs(1),
+            Box::new(move |bytes: &[u8]| {
+                replies_clone.lock().unwrap().push(bytes.to_vec());
+            }),
+            Box::new(move || {
+                *done_clone.lock().unwrap() = true;
+            }),
+        )
+        .expect("query dispatched");
+
+    let got = replies.lock().unwrap().clone();
+    assert_eq!(got, vec![b"hello, world".to_vec()]);
+    assert!(*done.lock().unwrap(), "on_done should have fired");
+}
+
+#[test]
+fn query_with_no_queryable_calls_done_immediately() {
+    let session = MockZenohSession::new();
+    let r = routing("robot/no/queryable");
+    let done = std::sync::Arc::new(std::sync::Mutex::new(false));
+    let done_clone = done.clone();
+
+    session
+        .query(
+            &r,
+            b"unused",
+            std::time::Duration::from_secs(1),
+            Box::new(|_: &[u8]| panic!("no replies expected")),
+            Box::new(move || {
+                *done_clone.lock().unwrap() = true;
+            }),
+        )
+        .expect("query dispatched");
+
+    assert!(*done.lock().unwrap(), "on_done should fire even with no queryable");
+}
+
+#[test]
+fn query_fans_out_to_multiple_queryables() {
+    use std::sync::{Arc, Mutex};
+
+    let session = MockZenohSession::new();
+    let r = routing("robot/arm/joint1");
+
+    let _q1 = session
+        .declare_queryable(
+            &r,
+            Box::new(|_, replier| {
+                replier.reply(b"q1-reply");
+                replier.terminate();
+            }),
+        )
+        .unwrap();
+    let _q2 = session
+        .declare_queryable(
+            &r,
+            Box::new(|_, replier| {
+                replier.reply(b"q2-reply");
+                replier.terminate();
+            }),
+        )
+        .unwrap();
+
+    let replies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let replies_clone = replies.clone();
+    session
+        .query(
+            &r,
+            b"",
+            std::time::Duration::from_secs(1),
+            Box::new(move |bytes| replies_clone.lock().unwrap().push(bytes.to_vec())),
+            Box::new(|| {}),
+        )
+        .unwrap();
+
+    let got = replies.lock().unwrap().clone();
+    assert_eq!(got.len(), 2);
+    assert!(got.iter().any(|r| r == b"q1-reply"));
+    assert!(got.iter().any(|r| r == b"q2-reply"));
+}
+
+#[test]
+fn query_fails_when_session_closed() {
+    let session = MockZenohSession::new();
+    let r = routing("robot/test");
+    session.set_state(SessionState::Closed {
+        reason: "test".into(),
+    });
     let err = session
-        .query(&r, b"", Duration::from_millis(100), on_reply, on_done)
-        .expect_err("Z1 query is stub");
-    assert!(err.to_string().contains("not yet implemented"));
+        .query(
+            &r,
+            b"",
+            std::time::Duration::from_secs(1),
+            Box::new(|_| {}),
+            Box::new(|| {}),
+        )
+        .expect_err("closed session rejects query");
+    let msg = err.to_string();
+    assert!(msg.contains("not alive"));
+}
+
+#[test]
+fn dropping_queryable_handle_stops_receiving_queries() {
+    use std::sync::{Arc, Mutex};
+
+    let session = MockZenohSession::new();
+    let r = routing("robot/arm/joint1");
+
+    let fired = Arc::new(Mutex::new(0u32));
+    let fired_clone = fired.clone();
+    let qable = session
+        .declare_queryable(
+            &r,
+            Box::new(move |_, replier| {
+                *fired_clone.lock().unwrap() += 1;
+                replier.reply(b"x");
+                replier.terminate();
+            }),
+        )
+        .unwrap();
+
+    // First query: queryable fires.
+    session
+        .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .unwrap();
+    assert_eq!(*fired.lock().unwrap(), 1);
+
+    drop(qable);
+
+    // Second query after drop: queryable should NOT fire.
+    session
+        .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .unwrap();
+    assert_eq!(*fired.lock().unwrap(), 1, "queryable should not fire after drop");
 }
