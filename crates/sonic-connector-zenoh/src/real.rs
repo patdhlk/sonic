@@ -42,6 +42,29 @@ use crate::session::{
 /// callback thread can invoke it without ownership transfer.
 type SharedQuerySink = Arc<dyn Fn(&[u8], QueryReplier) + Send + Sync + 'static>;
 
+/// Shared, sync-safe form of the `PayloadSink` user callback. Used by
+/// `query` to hand the same `on_reply` closure to zenoh's per-reply
+/// callback (which is `Fn`, not `FnOnce`).
+type SharedPayloadSink = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
+
+/// Drop guard that fires a [`DoneCallback`] (typically the gateway's
+/// `EndOfStream` emitter) exactly when its sole `Arc` reference is
+/// dropped. zenoh drops the per-query callback closure once the query
+/// has terminated (timeout fired or all peers replied); attaching this
+/// guard to the closure environment guarantees `EndOfStream` is emitted
+/// strictly after every `on_reply` invocation.
+struct DoneOnDrop(StdMutex<Option<DoneCallback>>);
+
+impl Drop for DoneOnDrop {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.0.lock() {
+            if let Some(cb) = guard.take() {
+                cb();
+            }
+        }
+    }
+}
+
 /// A live `zenoh::Session` plus a publisher cache, implementing
 /// [`ZenohSessionLike`] over the real zenoh-1.x stack (`REQ_0444`).
 pub struct RealZenohSession {
@@ -212,14 +235,30 @@ impl ZenohSessionLike for RealZenohSession {
     ) -> Result<(), SessionError> {
         let key = routing.key_expr().as_str().to_owned();
 
+        // zenoh's `.callback(F)` invokes `F` once per reply and then
+        // drops the callback when the query terminates (timeout fired
+        // or all peers replied). We attach `on_done` to a [`DoneOnDrop`]
+        // guard that lives inside the callback's closure environment,
+        // so EOS fires exactly when zenoh considers the query complete
+        // — strictly after every `on_reply` invocation, which is what
+        // the gateway needs for correct EndOfStream ordering.
+        let done_guard = Arc::new(DoneOnDrop(StdMutex::new(Some(on_done))));
+
+        let on_reply_arc: SharedPayloadSink = Arc::from(on_reply);
+
         self.inner
             .get(key.clone())
             .payload(payload.to_vec())
             .timeout(timeout)
             .callback(move |reply: zenoh::query::Reply| {
+                // Hold `done_guard` alive for the lifetime of the
+                // callback closure. When zenoh drops the closure, the
+                // Arc count goes to zero and `DoneOnDrop` fires
+                // `on_done`.
+                let _keep_alive = &done_guard;
                 if let Ok(sample) = reply.result() {
                     let bytes = sample.payload().to_bytes();
-                    on_reply(&bytes);
+                    (on_reply_arc)(&bytes);
                 }
                 // Reply-side errors are silently dropped here; Z4h
                 // introduces tracing for peer-side error reporting.
@@ -229,11 +268,6 @@ impl ZenohSessionLike for RealZenohSession {
                 reason: format!("get: {e}"),
             })?;
 
-        // Fire on_done after the get future has been dispatched. The
-        // gateway's outer timeout is authoritative for stream end —
-        // this on_done signals the querier task that the call
-        // completed normally.
-        on_done();
         Ok(())
     }
 

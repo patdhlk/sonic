@@ -14,7 +14,11 @@ default = []
 # `RealZenohSession` (added in Z4f). Off by default so consumers
 # that only want the framework types and `MockZenohSession` don't
 # pull zenoh's transitive dependencies.
-zenoh-integration = ["dep:zenoh"]
+#
+# We explicitly enable `zenoh/transport_tcp` so the real session can
+# open `tcp/...` locators — the upstream `zenoh` crate ships with
+# `default-features = false` here, which disables every transport.
+zenoh-integration = ["dep:zenoh", "zenoh/transport_tcp"]
 
 [dependencies]
 sonic-connector-core           = { path = "../sonic-connector-core" }
