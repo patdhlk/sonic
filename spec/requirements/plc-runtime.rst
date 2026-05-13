@@ -603,3 +603,20 @@ artefacts are authored.
    :types: req
    :columns: id, title, status, satisfies
    :show_filters:
+
+Safety refinements
+------------------
+
+The PLC runtime (``sonic-executor``) carries four TSRs from the SEooC
+safety concept (see :doc:`../safety/tsc`):
+
+* :need:`TSR_0003` (integrity-level declaration and process isolation
+  for executable items) — **draft**; ``ExecutableItem`` trait and
+  registration API need an integrity-level field. See :need:`ADR_0050`.
+* :need:`TSR_0004` (missed-deadline detection within one cycle) —
+  **implemented** by the executor's existing deadline monitor.
+* :need:`TSR_0009` (cross-process hosting mode) — **draft**; the
+  executor must support a mode that hosts only SC items and
+  cross-references QM items via iceoryx2.
+* :need:`TSR_0010` (heartbeat for Element B monitor) — **draft**; no
+  liveness heartbeat surface exists today.
