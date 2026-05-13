@@ -122,3 +122,56 @@ fn raw_writer_then_typed_reader_sees_raw_payload() {
         .expect("envelope available");
     assert_eq!(received.value, original);
 }
+
+#[test]
+fn send_raw_bytes_v2_round_trips_reserved_field() {
+    let node = make_node();
+    let factory = ServiceFactory::new(&node);
+    let name = unique_channel_name("raw_reserved_rt");
+
+    let reader = factory.create_raw_reader_named::<64>(&name).unwrap();
+    let writer = factory.create_raw_writer_named::<64>(&name).unwrap();
+
+    let corr: [u8; 32] = [7u8; 32];
+    writer
+        .send_raw_bytes_v2(b"hello", corr, 1234)
+        .expect("send v2");
+
+    let mut dest = [0u8; 64];
+    let mut got = None;
+    for _ in 0..100 {
+        if let Ok(Some(sample)) = reader.try_recv_into(&mut dest) {
+            got = Some(sample);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let sample = got.expect("envelope received");
+    assert_eq!(&dest[..sample.payload_len], b"hello");
+    assert_eq!(sample.correlation_id, corr);
+    assert_eq!(sample.reserved, 1234);
+}
+
+#[test]
+fn send_raw_bytes_legacy_writes_zero_reserved() {
+    let node = make_node();
+    let factory = ServiceFactory::new(&node);
+    let name = unique_channel_name("raw_reserved_legacy");
+
+    let reader = factory.create_raw_reader_named::<64>(&name).unwrap();
+    let writer = factory.create_raw_writer_named::<64>(&name).unwrap();
+
+    writer.send_raw_bytes(b"x", [0u8; 32]).expect("send legacy");
+
+    let mut dest = [0u8; 64];
+    let mut got = None;
+    for _ in 0..100 {
+        if let Ok(Some(sample)) = reader.try_recv_into(&mut dest) {
+            got = Some(sample);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let sample = got.expect("envelope received");
+    assert_eq!(sample.reserved, 0);
+}

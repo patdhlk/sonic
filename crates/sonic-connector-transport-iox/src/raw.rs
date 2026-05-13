@@ -60,6 +60,10 @@ pub struct RawSample {
     /// Number of payload bytes written into the caller-supplied
     /// buffer. Always `<= caller_buffer.len()` and `<= N`.
     pub payload_len: usize,
+    /// Envelope's reserved header word (`ConnectorEnvelope::reserved`).
+    /// Zero unless the sender used `send_raw_bytes_v2(...)` with a
+    /// non-zero value.
+    pub reserved: u32,
 }
 
 /// Byte-only iceoryx2 publisher. Owns a [`Publisher`] over
@@ -86,6 +90,9 @@ impl<const N: usize> RawChannelWriter<N> {
 
     /// Publish `payload` verbatim. No codec invocation.
     ///
+    /// Equivalent to [`Self::send_raw_bytes_v2`] with `reserved = 0`;
+    /// kept as a backwards-compatible thin wrapper.
+    ///
     /// # Errors
     ///
     /// Returns [`ConnectorError::PayloadOverflow`] when `payload.len()`
@@ -96,6 +103,29 @@ impl<const N: usize> RawChannelWriter<N> {
         &self,
         payload: &[u8],
         correlation_id: CorrelationId,
+    ) -> Result<RawSendOutcome, ConnectorError> {
+        self.send_raw_bytes_v2(payload, correlation_id, 0)
+    }
+
+    /// Publish `payload` verbatim, stamping the envelope's
+    /// [`ConnectorEnvelope::reserved`] header word with `reserved`.
+    ///
+    /// This is the wide form of [`Self::send_raw_bytes`]; the legacy
+    /// API delegates here with `reserved = 0`. Senders that want to
+    /// carry extra per-envelope metadata (e.g. an encoded per-call
+    /// timeout for the zenoh query path) use this variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError::PayloadOverflow`] when `payload.len()`
+    /// exceeds the channel's compile-time capacity `N`. Returns
+    /// [`ConnectorError::Stack`] wrapping any iceoryx2 loan / send
+    /// error.
+    pub fn send_raw_bytes_v2(
+        &self,
+        payload: &[u8],
+        correlation_id: CorrelationId,
+        reserved: u32,
     ) -> Result<RawSendOutcome, ConnectorError> {
         let written = payload.len();
         if written > N {
@@ -134,12 +164,15 @@ impl<const N: usize> RawChannelWriter<N> {
         // SAFETY: every header field is written through the raw
         // pointer below; after this block the entire envelope is
         // initialised (payload tail is uninit `u8`, which is fine).
+        // The `reserved` write covers the envelope's reserved header
+        // word — caller-supplied via `send_raw_bytes_v2`, or zero via
+        // the legacy `send_raw_bytes` wrapper.
         unsafe {
             core::ptr::addr_of_mut!((*env_ptr).sequence_number).write(seq);
             core::ptr::addr_of_mut!((*env_ptr).timestamp_ns).write(ts);
             core::ptr::addr_of_mut!((*env_ptr).correlation_id).write(correlation_id);
             core::ptr::addr_of_mut!((*env_ptr).payload_len).write(written_u32);
-            core::ptr::addr_of_mut!((*env_ptr).reserved).write(0);
+            core::ptr::addr_of_mut!((*env_ptr).reserved).write(reserved);
         }
         // SAFETY: every field initialised per the comment above.
         let sample = unsafe { sample.assume_init() };
@@ -201,6 +234,7 @@ impl<const N: usize> RawChannelReader<N> {
             timestamp_ns: env.timestamp_ns,
             correlation_id: env.correlation_id,
             payload_len: bytes.len(),
+            reserved: env.reserved,
         }))
     }
 }
