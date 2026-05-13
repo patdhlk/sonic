@@ -12,6 +12,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Type-erased owning handle for session-side declarations
 /// (subscriber, queryable). Stored in [`ZenohState::handles`]; on
@@ -30,7 +31,7 @@ use crate::gateway::ZenohGateway;
 use crate::health::ZenohHealthMonitor;
 use crate::options::ZenohConnectorOptions;
 use crate::registry::ChannelRegistry;
-use crate::session::ZenohSessionLike;
+use crate::session::{SessionState, ZenohSessionLike};
 
 /// Connector-internal state shared between [`ZenohConnector`] and the
 /// gateway-side dispatcher.
@@ -285,6 +286,37 @@ where
         let correlation_map = self.state.correlation_map();
         let query_reply_publishers = self.state.query_reply_publishers();
         let query_timeout = self.state.options().query_timeout;
+
+        // Z4e (REQ_0442): spawn the health watcher BEFORE the
+        // dispatcher consumes `session`. Clone the Arcs the watcher
+        // needs so the move below can take ownership of `session`.
+        let session_for_health = Arc::clone(&session);
+        let health = self.state.health_arc();
+        let stop_for_health = Arc::clone(&stop);
+        handle.spawn(async move {
+            let mut last = session_for_health.state();
+            // Emit an initial event so subscribers observe the
+            // starting state. Drops to a no-op when the starting state
+            // does not legally follow the monitor's initial
+            // `Connecting` (e.g. `Closed` from `Connecting` is legal
+            // via the `Down` mapping; `Alive` is legal via `Up`).
+            health.notify_transition(&last);
+            while !stop_for_health.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let current = session_for_health.state();
+                if current != last {
+                    health.notify_transition(&current);
+                    last = current.clone();
+                }
+                if matches!(current, SessionState::Closed { .. }) {
+                    // No further transitions are observable once the
+                    // session is closed; exit so the runtime can shut
+                    // down cleanly.
+                    break;
+                }
+            }
+        });
+
         handle.spawn(async move {
             let _ = dispatcher_loop(
                 registry,

@@ -14,11 +14,14 @@
 //!    more subscribers via a `crossbeam_channel::Sender`.
 
 use std::sync::Mutex;
+use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use sonic_connector_core::{
     ConnectorError, ConnectorHealth, HealthEvent, HealthMonitor, IllegalTransition,
 };
+
+use crate::session::SessionState;
 
 /// Health monitor + broadcast channel pair.
 #[derive(Debug)]
@@ -93,6 +96,40 @@ impl ZenohHealthMonitor {
     #[must_use]
     pub fn subscribe(&self) -> Receiver<HealthEvent> {
         self.rx.clone()
+    }
+
+    /// Map an observed [`SessionState`] transition into a
+    /// [`ConnectorHealth`] target and attempt the transition. Used by
+    /// the Z4e health watcher task — each observed change of the
+    /// underlying session state pushes one event onto the broadcast
+    /// channel via [`Self::transition_to`].
+    ///
+    /// Mapping (per `ARCH_0012`'s reachable edges):
+    ///
+    /// * `SessionState::Connecting` → `ConnectorHealth::Connecting`
+    /// * `SessionState::Alive`      → `ConnectorHealth::Up`
+    /// * `SessionState::Closed`     → `ConnectorHealth::Down`
+    ///
+    /// Illegal transitions per the health state machine (e.g. observing
+    /// `Alive` while already `Up`, or `Connecting` while `Up`) are
+    /// dropped silently — the watcher should not panic on a benign
+    /// no-op or an unreachable state-machine edge.
+    pub(crate) fn notify_transition(&self, next: &SessionState) {
+        let target = match next {
+            SessionState::Connecting => ConnectorHealth::Connecting {
+                since: Instant::now(),
+            },
+            SessionState::Alive => ConnectorHealth::Up,
+            SessionState::Closed { reason } => ConnectorHealth::Down {
+                reason: reason.clone(),
+                since: Instant::now(),
+            },
+        };
+        // Drop illegal-transition errors silently — `Up -> Up` /
+        // `Up -> Connecting` etc. are no-ops or unreachable for the
+        // watcher's caller. BroadcastClosed is impossible because the
+        // monitor holds an internal receiver clone.
+        let _ = self.transition_to(target);
     }
 }
 
