@@ -9,9 +9,13 @@ name = "sonic-spec"
 id_required = true
 id_length = 6
 
-# Extra options carried by safety artefacts. `asil` holds a free-form
-# ISO 26262 ASIL value: "QM" | "A" | "B" | "C" | "D" | "B(D)" | "C(D)" | etc.
-extra_options = ["asil"]
+# Extra fields carried by safety artefacts. (sphinx-needs 8.x renamed
+# extra_options → fields and changed the shape from list-of-strings to a
+# dict-of-dicts keyed by field name, with metadata like description/schema.)
+[needs.fields.asil]
+description = "ISO 26262 ASIL value: QM | A | B | C | D | B(D) | C(D) | etc."
+nullable = true
+schema = { type = "string" }
 
 # Need types — directives available in RST. Extend as the spec grows.
 [[needs.types]]
