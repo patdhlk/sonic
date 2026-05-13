@@ -44,3 +44,39 @@ fn connector_associated_types_match_routing_and_codec() {
     }
     assert_routing::<ZenohRouting, JsonCodec, ZenohConnector<MockZenohSession, JsonCodec>>();
 }
+
+#[test]
+fn create_querier_returns_zenoh_querier() {
+    use sonic_connector_core::ChannelDescriptor;
+    use sonic_connector_zenoh::{KeyExprOwned, ZenohQuerier};
+
+    let opts = ZenohConnectorOptions::builder().build();
+    let state = Arc::new(ZenohState::new(opts));
+    let session = Arc::new(MockZenohSession::new());
+    let connector =
+        ZenohConnector::new(state, session, JsonCodec).expect("constructable");
+
+    let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/query").unwrap());
+    let desc = ChannelDescriptor::<ZenohRouting, 256>::new("robot.query".to_string(), routing)
+        .unwrap();
+    let _q: ZenohQuerier<u32, u32, JsonCodec, 256> =
+        connector.create_querier::<u32, u32, 256>(&desc).expect("querier");
+}
+
+#[test]
+fn create_queryable_returns_zenoh_queryable() {
+    use sonic_connector_core::ChannelDescriptor;
+    use sonic_connector_zenoh::{KeyExprOwned, ZenohQueryable};
+
+    let opts = ZenohConnectorOptions::builder().build();
+    let state = Arc::new(ZenohState::new(opts));
+    let session = Arc::new(MockZenohSession::new());
+    let connector =
+        ZenohConnector::new(state, session, JsonCodec).expect("constructable");
+
+    let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/query").unwrap());
+    let desc = ChannelDescriptor::<ZenohRouting, 256>::new("robot.query".to_string(), routing)
+        .unwrap();
+    let _qable: ZenohQueryable<u32, u32, JsonCodec, 256> =
+        connector.create_queryable::<u32, u32, 256>(&desc).expect("queryable");
+}

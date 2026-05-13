@@ -8,6 +8,7 @@
 //! `Connector` trait impl (`name`, `health`, `subscribe_health`,
 //! `register_with`, `create_writer`, `create_reader`).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,17 +20,34 @@ use sonic_connector_transport_iox::ServiceFactory;
 use crate::gateway::ZenohGateway;
 use crate::health::ZenohHealthMonitor;
 use crate::options::ZenohConnectorOptions;
-use crate::registry::ChannelRegistry;
-use crate::session::ZenohSessionLike;
+use crate::registry::{ChannelRegistry, QueryId};
+use crate::session::{QueryReplier, ZenohSessionLike};
+
+/// Shared map of in-flight upstream queries — gateway-minted [`QueryId`]
+/// → [`QueryReplier`] from the upstream session.
+type CorrelationMap = Arc<Mutex<HashMap<QueryId, QueryReplier>>>;
 
 /// Connector-internal state shared between [`ZenohConnector`] and the
 /// gateway-side dispatcher.
-#[derive(Debug)]
 pub struct ZenohState {
     health: Arc<ZenohHealthMonitor>,
     options: ZenohConnectorOptions,
     registry: Arc<Mutex<ChannelRegistry>>,
     stop: Arc<AtomicBool>,
+    correlation_map: CorrelationMap,
+}
+
+impl std::fmt::Debug for ZenohState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `QueryReplier` does not implement Debug, so we skip the
+        // `correlation_map` field here.
+        f.debug_struct("ZenohState")
+            .field("health", &self.health)
+            .field("options", &self.options)
+            .field("registry", &self.registry)
+            .field("stop", &self.stop)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ZenohState {
@@ -48,6 +66,7 @@ impl ZenohState {
             options,
             registry: Arc::new(Mutex::new(ChannelRegistry::with_capacity(cap))),
             stop: Arc::new(AtomicBool::new(false)),
+            correlation_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -80,6 +99,15 @@ impl ZenohState {
     #[must_use]
     pub fn stop_signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+
+    /// Shared map of in-flight upstream queries — gateway-minted
+    /// [`QueryId`] → [`QueryReplier`] from the upstream session.
+    /// Populated by `create_queryable`'s session callback; drained by
+    /// the dispatcher in Z3f.
+    #[must_use]
+    pub(crate) fn correlation_map(&self) -> CorrelationMap {
+        Arc::clone(&self.correlation_map)
     }
 }
 
@@ -348,6 +376,231 @@ impl<const N: usize> IoxInboundPublishOwned<N> {
 impl<const N: usize> InboundPublish for IoxInboundPublishOwned<N> {
     fn publish_bytes(&self, bytes: &[u8]) -> Result<(), ConnectorError> {
         self.inner.publish_bytes(bytes)
+    }
+}
+
+// ── Query-side non-trait methods ─────────────────────────────────────────────
+//
+// Per `ADR_0040` / `REQ_0290` / `REQ_0294` — queries are NOT on the
+// `Connector` trait. They're concrete methods on the Zenoh-specific
+// connector type.
+
+use crate::dispatcher::{IoxCorrelatedPublish, IoxQuerierDrain, IoxReplyDrain};
+use crate::querier::ZenohQuerier;
+use crate::queryable::ZenohQueryable;
+use crate::registry::{CorrelatedPublish, QuerierDrain, ReplyDrain};
+
+impl<S, C> ZenohConnector<S, C>
+where
+    S: ZenohSessionLike + 'static,
+    C: sonic_connector_core::PayloadCodec + Clone + Send + Sync + 'static,
+{
+    /// Open a query channel and return a [`ZenohQuerier<Q, R, C, N>`].
+    ///
+    /// `Q` is the request type; `R` is the reply type. The querier
+    /// uses the connector's `default_timeout` (`REQ_0425`).
+    ///
+    /// Creates two iceoryx2 services:
+    ///
+    /// * `{name}.query.out` — plugin writes encoded `Q` here; gateway
+    ///   drains and calls `session.query`.
+    /// * `{name}.reply.in` — gateway publishes framed reply bytes
+    ///   here; plugin's querier reads them.
+    ///
+    /// # Errors
+    /// Returns [`ConnectorError`] on iox failure or registry conflict.
+    ///
+    /// # Panics
+    /// Panics only if the registry mutex is poisoned, which would
+    /// require another thread to panic while holding the lock.
+    pub fn create_querier<Q, R, const N: usize>(
+        &self,
+        descriptor: &ChannelDescriptor<ZenohRouting, N>,
+    ) -> Result<ZenohQuerier<Q, R, C, N>, ConnectorError>
+    where
+        Q: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let routing = descriptor.routing().clone();
+        let factory = self.factory();
+        let q_name = format!("{}.query.out", descriptor.name());
+        let r_name = format!("{}.reply.in", descriptor.name());
+
+        // Plugin-side: writes encoded Q, reads framed replies.
+        let q_writer_plugin = factory.create_raw_writer_named::<N>(&q_name)?;
+        let r_reader_plugin = factory.create_raw_reader_named::<N>(&r_name)?;
+
+        // Gateway-side: drains plugin Q-bytes, publishes framed replies.
+        let q_reader_gw = factory.create_raw_reader_named::<N>(&q_name)?;
+        let r_writer_gw = factory.create_raw_writer_named::<N>(&r_name)?;
+
+        let q_drain: Box<dyn QuerierDrain> =
+            Box::new(IoxQuerierDrain::<N>::new(q_reader_gw));
+        let r_publish: Box<dyn CorrelatedPublish> =
+            Box::new(IoxCorrelatedPublish::<N>::new(r_writer_gw));
+
+        {
+            let mut reg = self
+                .state
+                .registry()
+                .lock()
+                .expect("registry mutex not poisoned");
+            reg.register(
+                descriptor.name().to_string(),
+                routing.clone(),
+                ChannelDirection::QuerierOut,
+                ChannelBinding::QuerierOut(q_drain),
+            )?;
+            reg.register(
+                descriptor.name().to_string(),
+                routing,
+                ChannelDirection::QuerierReplyIn,
+                ChannelBinding::QuerierReplyIn(r_publish),
+            )?;
+        }
+
+        Ok(ZenohQuerier::<Q, R, C, N>::new(
+            q_writer_plugin,
+            r_reader_plugin,
+            self.codec.clone(),
+            self.state.options().query_timeout,
+        ))
+    }
+
+    /// Open a query channel and return a
+    /// [`ZenohQueryable<Q, R, C, N>`].
+    ///
+    /// The connector's session is registered with a queryable callback
+    /// that funnels upstream queries to `{name}.query.in`; replies sent
+    /// via the returned handle land on `{name}.reply.out` and are
+    /// routed by the gateway dispatcher (Z3f wires the routing).
+    ///
+    /// # Errors
+    /// Returns [`ConnectorError`] on iox failure, registry conflict, or
+    /// session-subscribe failure.
+    ///
+    /// # Panics
+    /// Panics only if the registry or session-slot mutexes are
+    /// poisoned, which would require another thread to panic while
+    /// holding either lock.
+    pub fn create_queryable<Q, R, const N: usize>(
+        &self,
+        descriptor: &ChannelDescriptor<ZenohRouting, N>,
+    ) -> Result<ZenohQueryable<Q, R, C, N>, ConnectorError>
+    where
+        Q: serde::de::DeserializeOwned,
+        R: serde::Serialize,
+    {
+        let routing = descriptor.routing().clone();
+        let factory = self.factory();
+        let q_name = format!("{}.query.in", descriptor.name());
+        let r_name = format!("{}.reply.out", descriptor.name());
+
+        // Plugin-side: reads incoming queries, writes framed replies.
+        let q_reader_plugin = factory.create_raw_reader_named::<N>(&q_name)?;
+        let r_writer_plugin = factory.create_raw_writer_named::<N>(&r_name)?;
+
+        // Gateway-side: publishes incoming Q-bytes, drains framed replies.
+        let q_writer_gw = factory.create_raw_writer_named::<N>(&q_name)?;
+        let r_reader_gw = factory.create_raw_reader_named::<N>(&r_name)?;
+
+        // Wrap the q_writer_gw in an Arc so the session callback and
+        // the registry binding can share it.
+        let q_publish: Arc<IoxCorrelatedPublish<N>> =
+            Arc::new(IoxCorrelatedPublish::<N>::new(q_writer_gw));
+        let q_publish_for_callback = Arc::clone(&q_publish);
+        let r_drain: Box<dyn ReplyDrain> =
+            Box::new(IoxReplyDrain::<N>::new(r_reader_gw));
+
+        // Wire the session's declare_queryable callback. On each
+        // upstream query: mint a QueryId, stash the replier in the
+        // correlation map, publish the request bytes on .query.in
+        // with that QueryId. The dispatcher (Z3f) drains .reply.out
+        // and uses the correlation_map to forward replies to the
+        // stashed QueryReplier.
+        let correlation_map = self.state.correlation_map();
+        let on_query: crate::session::QuerySink = Box::new(
+            move |req: &[u8], replier: crate::session::QueryReplier| {
+                let id = crate::querier::mint_query_id();
+                correlation_map
+                    .lock()
+                    .expect("correlation map mutex not poisoned")
+                    .insert(id, replier);
+                // Publish the request bytes on .query.in with the
+                // minted QueryId as correlation_id. Drop publish
+                // errors silently — the plugin will time out anyway
+                // (REQ_0425, handled in Z3f).
+                let _ = q_publish_for_callback.publish_with_correlation(id, req);
+            },
+        );
+
+        // Subscribe with the session. The session is consumed by
+        // register_with — if it's already gone, we can't declare.
+        let qable_handle = self
+            .session_slot
+            .lock()
+            .expect("session slot mutex not poisoned")
+            .as_ref()
+            .ok_or_else(|| ConnectorError::stack(SessionAlreadyTaken))?
+            .declare_queryable(&routing, on_query)
+            .map_err(|e| {
+                ConnectorError::stack(SessionFailure(format!("declare_queryable: {e}")))
+            })?;
+        // TODO(Z4): refine queryable lifecycle. Z3 leaks the handle
+        // for the connector lifetime, mirroring how create_reader
+        // leaks the SubscriptionHandle.
+        Box::leak(Box::new(qable_handle));
+
+        {
+            let mut reg = self
+                .state
+                .registry()
+                .lock()
+                .expect("registry mutex not poisoned");
+            reg.register(
+                descriptor.name().to_string(),
+                routing.clone(),
+                ChannelDirection::QueryableQueryIn,
+                ChannelBinding::QueryableQueryIn(Box::new(IoxCorrelatedPublishOwned::new(
+                    q_publish,
+                ))),
+            )?;
+            reg.register(
+                descriptor.name().to_string(),
+                routing,
+                ChannelDirection::QueryableReplyOut,
+                ChannelBinding::QueryableReplyOut(r_drain),
+            )?;
+        }
+
+        Ok(ZenohQueryable::<Q, R, C, N>::new(
+            q_reader_plugin,
+            r_writer_plugin,
+            self.codec.clone(),
+        ))
+    }
+}
+
+/// Owning wrapper around `Arc<IoxCorrelatedPublish<N>>` so the registry
+/// can hold the publisher behind `Box<dyn CorrelatedPublish>` while
+/// the session callback also holds a clone.
+struct IoxCorrelatedPublishOwned<const N: usize> {
+    inner: Arc<IoxCorrelatedPublish<N>>,
+}
+
+impl<const N: usize> IoxCorrelatedPublishOwned<N> {
+    const fn new(inner: Arc<IoxCorrelatedPublish<N>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<const N: usize> CorrelatedPublish for IoxCorrelatedPublishOwned<N> {
+    fn publish_with_correlation(
+        &self,
+        id: QueryId,
+        bytes: &[u8],
+    ) -> Result<(), ConnectorError> {
+        self.inner.publish_with_correlation(id, bytes)
     }
 }
 

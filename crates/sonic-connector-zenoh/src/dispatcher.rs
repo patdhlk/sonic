@@ -17,7 +17,8 @@ use sonic_connector_core::ConnectorError;
 use sonic_connector_transport_iox::{RawChannelReader, RawChannelWriter};
 
 use crate::registry::{
-    ChannelBinding, ChannelRegistry, InboundPublish, OutboundDrain,
+    ChannelBinding, ChannelRegistry, CorrelatedPublish, InboundPublish, OutboundDrain, QuerierDrain,
+    QueryId, ReplyDrain,
 };
 use crate::session::ZenohSessionLike;
 
@@ -126,5 +127,88 @@ fn drain_outbound_once<S>(
                 let _ = session.publish(&entry.routing, &scratch[..n]);
             }
         }
+    }
+}
+
+/// iox-backed [`QuerierDrain`]. Drains envelopes from `.query.out`,
+/// returning `(QueryId, payload_len)`.
+pub struct IoxQuerierDrain<const N: usize> {
+    reader: RawChannelReader<N>,
+}
+
+impl<const N: usize> IoxQuerierDrain<N> {
+    /// Wrap a [`RawChannelReader`] so the dispatcher can drain it as a
+    /// trait object.
+    #[must_use]
+    pub const fn new(reader: RawChannelReader<N>) -> Self {
+        Self { reader }
+    }
+}
+
+impl<const N: usize> QuerierDrain for IoxQuerierDrain<N> {
+    fn drain_query(
+        &self,
+        dest: &mut [u8],
+    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+        let Some(sample) = self.reader.try_recv_into(dest)? else {
+            return Ok(None);
+        };
+        Ok(Some((QueryId(sample.correlation_id), sample.payload_len)))
+    }
+}
+
+/// iox-backed [`ReplyDrain`]. Drains envelopes from `.reply.out`,
+/// returning `(QueryId, payload_len)`.
+pub struct IoxReplyDrain<const N: usize> {
+    reader: RawChannelReader<N>,
+}
+
+impl<const N: usize> IoxReplyDrain<N> {
+    /// Wrap a [`RawChannelReader`] so the dispatcher can drain it as a
+    /// trait object.
+    #[must_use]
+    pub const fn new(reader: RawChannelReader<N>) -> Self {
+        Self { reader }
+    }
+}
+
+impl<const N: usize> ReplyDrain for IoxReplyDrain<N> {
+    fn drain_reply(
+        &self,
+        dest: &mut [u8],
+    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+        let Some(sample) = self.reader.try_recv_into(dest)? else {
+            return Ok(None);
+        };
+        Ok(Some((QueryId(sample.correlation_id), sample.payload_len)))
+    }
+}
+
+/// iox-backed [`CorrelatedPublish`]. Publishes bytes verbatim with the
+/// caller-supplied `correlation_id`. Mutex-wrapped because session
+/// callbacks invoke this from multiple threads.
+pub struct IoxCorrelatedPublish<const N: usize> {
+    writer: Mutex<RawChannelWriter<N>>,
+}
+
+impl<const N: usize> IoxCorrelatedPublish<N> {
+    /// Wrap a [`RawChannelWriter`] so session callbacks can publish
+    /// bytes through it with explicit correlation ids.
+    #[must_use]
+    pub const fn new(writer: RawChannelWriter<N>) -> Self {
+        Self {
+            writer: Mutex::new(writer),
+        }
+    }
+}
+
+impl<const N: usize> CorrelatedPublish for IoxCorrelatedPublish<N> {
+    fn publish_with_correlation(
+        &self,
+        id: QueryId,
+        bytes: &[u8],
+    ) -> Result<(), ConnectorError> {
+        let writer = self.writer.lock().expect("correlated publisher mutex poisoned");
+        writer.send_raw_bytes(bytes, id.0).map(|_| ())
     }
 }

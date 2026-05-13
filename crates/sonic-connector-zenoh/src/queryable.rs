@@ -33,8 +33,7 @@ where
     C: PayloadCodec,
 {
     /// Construct a queryable from raw iox handles. Called only by the
-    /// connector's `create_queryable` impl (wired in Z3e).
-    #[allow(dead_code)] // Wired in Z3e via `ZenohConnector::create_queryable`.
+    /// connector's `create_queryable` impl.
     pub(crate) fn new(
         reader: RawChannelReader<N>,
         writer: RawChannelWriter<N>,
