@@ -17,15 +17,12 @@ use iceoryx2::prelude::{NodeBuilder, ipc};
 use sonic_connector_core::ConnectorError;
 use sonic_connector_transport_iox::ServiceFactory;
 
+use crate::dispatcher::{CorrelationMap, QueryReplyPublishers};
 use crate::gateway::ZenohGateway;
 use crate::health::ZenohHealthMonitor;
 use crate::options::ZenohConnectorOptions;
-use crate::registry::{ChannelRegistry, QueryId};
-use crate::session::{QueryReplier, ZenohSessionLike};
-
-/// Shared map of in-flight upstream queries — gateway-minted [`QueryId`]
-/// → [`QueryReplier`] from the upstream session.
-type CorrelationMap = Arc<Mutex<HashMap<QueryId, QueryReplier>>>;
+use crate::registry::ChannelRegistry;
+use crate::session::ZenohSessionLike;
 
 /// Connector-internal state shared between [`ZenohConnector`] and the
 /// gateway-side dispatcher.
@@ -35,12 +32,14 @@ pub struct ZenohState {
     registry: Arc<Mutex<ChannelRegistry>>,
     stop: Arc<AtomicBool>,
     correlation_map: CorrelationMap,
+    query_reply_publishers: QueryReplyPublishers,
 }
 
 impl std::fmt::Debug for ZenohState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `QueryReplier` does not implement Debug, so we skip the
-        // `correlation_map` field here.
+        // `QueryReplier` and `Arc<dyn CorrelatedPublish>` do not
+        // implement Debug, so we skip the `correlation_map` and
+        // `query_reply_publishers` fields here.
         f.debug_struct("ZenohState")
             .field("health", &self.health)
             .field("options", &self.options)
@@ -67,6 +66,7 @@ impl ZenohState {
             registry: Arc::new(Mutex::new(ChannelRegistry::with_capacity(cap))),
             stop: Arc::new(AtomicBool::new(false)),
             correlation_map: Arc::new(Mutex::new(HashMap::new())),
+            query_reply_publishers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -102,12 +102,21 @@ impl ZenohState {
     }
 
     /// Shared map of in-flight upstream queries — gateway-minted
-    /// [`QueryId`] → [`QueryReplier`] from the upstream session.
-    /// Populated by `create_queryable`'s session callback; drained by
-    /// the dispatcher in Z3f.
+    /// [`crate::registry::QueryId`] → [`crate::session::QueryReplier`]
+    /// from the upstream session. Populated by `create_queryable`'s
+    /// session callback; drained by the dispatcher in Z3f.
     #[must_use]
     pub(crate) fn correlation_map(&self) -> CorrelationMap {
         Arc::clone(&self.correlation_map)
+    }
+
+    /// Sidecar publisher map — descriptor name → `.reply.in`
+    /// publisher. See Option B in the Z3 plan task 6: this lets the
+    /// dispatcher's `QuerierOut` branch look up the matching reply
+    /// publisher without re-entering the registry mutex.
+    #[must_use]
+    pub(crate) fn query_reply_publishers(&self) -> QueryReplyPublishers {
+        Arc::clone(&self.query_reply_publishers)
     }
 }
 
@@ -247,8 +256,20 @@ where
         let registry = Arc::clone(self.state.registry());
         let stop = self.state.stop_signal();
         let tick = self.state.options().dispatcher_tick;
+        let correlation_map = self.state.correlation_map();
+        let query_reply_publishers = self.state.query_reply_publishers();
+        let query_timeout = self.state.options().query_timeout;
         handle.spawn(async move {
-            let _ = dispatcher_loop(registry, session, stop, tick).await;
+            let _ = dispatcher_loop(
+                registry,
+                session,
+                stop,
+                tick,
+                correlation_map,
+                query_reply_publishers,
+                query_timeout,
+            )
+            .await;
         });
 
         // Heartbeat `ExecutableItem` so the connector is a well-formed
@@ -388,7 +409,7 @@ impl<const N: usize> InboundPublish for IoxInboundPublishOwned<N> {
 use crate::dispatcher::{IoxCorrelatedPublish, IoxQuerierDrain, IoxReplyDrain};
 use crate::querier::ZenohQuerier;
 use crate::queryable::ZenohQueryable;
-use crate::registry::{CorrelatedPublish, QuerierDrain, ReplyDrain};
+use crate::registry::{CorrelatedPublish, QuerierDrain, QueryId, ReplyDrain};
 
 impl<S, C> ZenohConnector<S, C>
 where
@@ -436,8 +457,26 @@ where
 
         let q_drain: Box<dyn QuerierDrain> =
             Box::new(IoxQuerierDrain::<N>::new(q_reader_gw));
+
+        // Wrap the `.reply.in` publisher in an `Arc` so the registry
+        // binding and the sidecar map can share it. The dispatcher's
+        // `QuerierOut` branch looks the publisher up in the sidecar
+        // map by descriptor name and binds it into the reply-stamping
+        // callbacks for `session.query`.
+        let r_publish_arc: Arc<IoxCorrelatedPublish<N>> =
+            Arc::new(IoxCorrelatedPublish::<N>::new(r_writer_gw));
+
+        self.state
+            .query_reply_publishers()
+            .lock()
+            .expect("query reply publishers mutex not poisoned")
+            .insert(
+                descriptor.name().to_string(),
+                Arc::clone(&r_publish_arc) as Arc<dyn CorrelatedPublish>,
+            );
+
         let r_publish: Box<dyn CorrelatedPublish> =
-            Box::new(IoxCorrelatedPublish::<N>::new(r_writer_gw));
+            Box::new(IoxCorrelatedPublishOwned::new(r_publish_arc));
 
         {
             let mut reg = self
