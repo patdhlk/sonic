@@ -68,6 +68,9 @@ pub struct MockZenohSession {
     /// `query_hangs` was true at the time of the call. Keyed by the
     /// routing's key-expression string. Used by `force_late_reply`
     /// to exercise the gateway's late-reply dedup path (`Z5c`).
+    ///
+    /// If two `query()` calls hit the same key before
+    /// `force_late_reply`, the second silently overwrites the first.
     hung_callbacks: Mutex<HashMap<String, (PayloadSink, DoneCallback)>>,
     /// Reported peer count for the health-watcher polling path
     /// (`ZenohSessionLike::peer_count`). Defaults to `usize::MAX`

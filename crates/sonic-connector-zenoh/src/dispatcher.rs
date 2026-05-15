@@ -349,12 +349,49 @@ async fn drain_outbound_once<S>(
 /// frame is published on the matching `.reply.in` channel so the
 /// querier observes `QuerierEvent::Timeout`.
 ///
-/// Late zenoh replies (real-session only) are filtered by the
-/// `sealed_queries` sidecar — see `on_reply` / `on_done` closures
-/// above. The timeout path seals the id BEFORE publishing the `0x03`
-/// so a racy upstream callback observes the sealed state and drops
-/// its frame. A delayed eviction task removes the id after one more
-/// `effective_timeout` so the set stays bounded (`Z5c`).
+/// # Claim-or-seal protocol (`Z5c`)
+///
+/// Late zenoh replies (real-session only) and gateway-synthetic
+/// timeout frames are coordinated through the `sealed_queries`
+/// sidecar set under a *single* critical section per emitter, so the
+/// terminator emission is atomic with the seal check:
+///
+/// * `on_reply` (data chunk) — acquires the seal lock, returns early
+///   if the id is sealed, otherwise publishes a `Data` frame and
+///   releases the lock. Data chunks do NOT insert into the set: a
+///   legitimate reply stream may publish many `Data` frames before
+///   its `EndOfStream`, and the set must not block subsequent
+///   chunks.
+/// * `on_done` (end-of-stream terminator) — acquires the seal lock
+///   and calls `insert(id)`. If `insert` returns `false`, the
+///   timeout arm has already published `0x03` for this id and the
+///   `EndOfStream` is dropped. Otherwise this closure publishes the
+///   `EndOfStream` frame under the same guard.
+/// * Timeout arm (synthetic terminator) — acquires the seal lock and
+///   calls `insert(id)`. If `insert` returns `false`, `on_done` has
+///   already published `EndOfStream` for this id (the upstream
+///   reply genuinely landed in time on a different thread); the
+///   timeout arm drops its `0x03`. Otherwise it publishes the
+///   synthetic terminator under the same guard.
+///
+/// Net invariant — exactly one terminator (`EndOfStream` OR
+/// `Timeout`) is published per query id, whichever emitter wins the
+/// mutex first. `publish_with_correlation` is a synchronous
+/// iceoryx2 call (no `.await`), so holding the lock across the
+/// publish is safe.
+///
+/// A delayed eviction task removes the id after one more
+/// `effective_timeout` so the set's memory footprint stays
+/// proportional to *recent* timeouts, not lifetime timeouts.
+//
+// `clippy::significant_drop_tightening` would prefer the
+// `MutexGuard`s in the closures be dropped before the publish.
+// That is exactly what the original (defective) implementation
+// did, and is the race this fix closes: the guard MUST be held
+// across the synchronous `publish_with_correlation` call so the
+// seal-check / claim and the terminator emission are atomic.
+// The lock is never held across an `.await`.
+#[allow(clippy::significant_drop_tightening)]
 fn spawn_query_with_timeout<S>(
     session: Arc<S>,
     routing: crate::routing::ZenohRouting,
@@ -377,27 +414,35 @@ fn spawn_query_with_timeout<S>(
     let sealed_for_evict = Arc::clone(&sealed_queries);
     tokio::spawn(async move {
         let on_reply: PayloadSink = Box::new(move |bytes: &[u8]| {
-            // Drop late replies that arrived after the gateway sealed
-            // this id on timeout. Hoist the lookup so we never hold
-            // the mutex across the publish.
+            // Single critical section: check sealed AND publish under
+            // the same guard. Data chunks do NOT insert into the
+            // sealed set — multiple `Data` frames may legitimately
+            // stream out before `EndOfStream`. `publish_with_correlation`
+            // is a synchronous iceoryx2 call, so the lock is held for
+            // the publish cost only. See `Z5c` claim-or-seal docs
+            // above.
             let sealed = sealed_for_reply
                 .lock()
-                .expect("sealed_queries poisoned")
-                .contains(&id);
-            if sealed {
+                .expect("sealed_queries poisoned");
+            if sealed.contains(&id) {
                 return;
             }
             let mut framed = Vec::with_capacity(1 + bytes.len());
             framed.push(crate::session::FrameKind::Data.discriminator());
             framed.extend_from_slice(bytes);
             let _ = pub_reply.publish_with_correlation(id, &framed);
+            // guard drops here, after publish
         });
         let on_done: DoneCallback = Box::new(move || {
-            let sealed = sealed_for_done
+            // Terminator path — claim the slot AND publish under one
+            // guard. `insert` returns `false` if the timeout arm
+            // already claimed; in that case the `0x03` has shipped
+            // and we must drop our `EndOfStream` to preserve the
+            // "exactly one terminator per id" invariant.
+            let mut sealed = sealed_for_done
                 .lock()
-                .expect("sealed_queries poisoned")
-                .contains(&id);
-            if sealed {
+                .expect("sealed_queries poisoned");
+            if !sealed.insert(id) {
                 return;
             }
             let _ = pub_done.publish_with_correlation(
@@ -415,29 +460,47 @@ fn spawn_query_with_timeout<S>(
                 warn!(query_id = ?id, error = %e, "session.query returned error");
             }
             Err(_elapsed) => {
-                // Timeout fired before session.query completed — emit
-                // the synthetic 0x03 terminator on the reply path so
-                // the querier sees `QuerierEvent::Timeout` (TEST_0307).
+                // Timeout fired before session.query completed —
+                // emit the synthetic 0x03 terminator on the reply
+                // path so the querier sees `QuerierEvent::Timeout`
+                // (TEST_0307).
                 //
-                // CRITICAL: seal BEFORE publishing so any upstream
-                // callback racing with this branch observes the seal
-                // and drops its frame.
-                sealed_queries
-                    .lock()
-                    .expect("sealed_queries poisoned")
-                    .insert(id);
-                warn!(
-                    query_id = ?id,
-                    ?effective_timeout,
-                    "query timed out, emitting 0x03"
-                );
-                let _ = publisher_for_timeout.publish_with_correlation(
-                    id,
-                    &[crate::session::FrameKind::Timeout.discriminator()],
-                );
+                // Single critical section: claim the seal AND
+                // publish the 0x03 under the same guard. If
+                // `insert` returns `false`, `on_done` has already
+                // claimed and published `EndOfStream` (the upstream
+                // reply genuinely arrived before the timer); in
+                // that case we drop our `0x03` to preserve the
+                // "exactly one terminator per id" invariant.
+                {
+                    let mut sealed = sealed_queries
+                        .lock()
+                        .expect("sealed_queries poisoned");
+                    if sealed.insert(id) {
+                        warn!(
+                            query_id = ?id,
+                            ?effective_timeout,
+                            "query timed out, emitting 0x03"
+                        );
+                        let _ = publisher_for_timeout.publish_with_correlation(
+                            id,
+                            &[crate::session::FrameKind::Timeout.discriminator()],
+                        );
+                    } else {
+                        debug!(
+                            query_id = ?id,
+                            "timeout fired but EndOfStream already sealed; dropping 0x03"
+                        );
+                    }
+                    // guard drops here, before spawning the eviction
+                    // task — we must not hold a `MutexGuard` across
+                    // `tokio::spawn`.
+                }
                 // Bounded eviction: drop the seal after another
-                // `effective_timeout` so the set doesn't grow without
-                // bound. Fire-and-forget — the JoinHandle is dropped.
+                // `effective_timeout` so the set's memory footprint
+                // stays proportional to *recent* timeouts, not
+                // lifetime timeouts. Fire-and-forget — the
+                // JoinHandle is dropped.
                 let evict_after = effective_timeout;
                 let _evict = tokio::spawn(async move {
                     tokio::time::sleep(evict_after).await;
