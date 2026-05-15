@@ -63,9 +63,47 @@ impl ZenohGateway {
 
     /// Borrow a tokio [`Handle`] for spawning work on the gateway's
     /// runtime. Returns `None` after `Drop` has consumed the runtime.
+    ///
+    /// Crate-internal only — the public `spawn` method (below) is the
+    /// supported entry point for external callers. Keeping the handle
+    /// out of the public surface preserves `REQ_0403` (no `tokio::`
+    /// types in the public API of `sonic-connector-zenoh`).
     #[must_use]
-    pub fn handle(&self) -> Option<Handle> {
+    pub(crate) fn handle(&self) -> Option<Handle> {
         self.runtime.as_ref().map(Runtime::handle).cloned()
+    }
+
+    /// Spawn `fut` on the gateway's tokio runtime without exposing any
+    /// `tokio::` types in the signature (`REQ_0403`).
+    ///
+    /// The returned `JoinHandle` is dropped internally — call sites in
+    /// the connector discard the handle, and external callers can
+    /// observe task progress through their own channels.
+    ///
+    /// Callers must keep the [`ZenohGateway`] alive for the lifetime
+    /// of any task they spawn; `Drop` on the gateway shuts the runtime
+    /// down within the configured budget, which cancels in-flight
+    /// tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the runtime has already been consumed by `Drop`.
+    /// This should not happen in normal use because `spawn` requires
+    /// `&self` and `Drop` requires `&mut self`.
+    pub fn spawn<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = self
+            .runtime
+            .as_ref()
+            .expect("runtime not yet dropped")
+            .handle();
+        // Drop the JoinHandle on the floor — call sites observe task
+        // progress through their own channels, and we deliberately
+        // avoid exposing the `tokio::task::JoinHandle` type
+        // (`REQ_0403`).
+        drop(handle.spawn(fut));
     }
 
     /// Shutdown budget honoured by the `Drop` impl.

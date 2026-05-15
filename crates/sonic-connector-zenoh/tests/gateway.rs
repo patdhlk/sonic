@@ -10,10 +10,10 @@ use sonic_connector_zenoh::gateway::{DEFAULT_SHUTDOWN_BUDGET, ZenohGateway};
 fn gateway_starts_a_runtime() {
     let opts = ZenohConnectorOptions::builder().build();
     let gateway = ZenohGateway::new(opts).expect("runtime up");
-    let handle = gateway.handle().expect("handle available before drop");
-    // Spawn a trivial task and block until it completes.
+    // Spawn a trivial task and block until it completes — proves the
+    // runtime is up without naming any `tokio::` type (`REQ_0403`).
     let (tx, rx) = std::sync::mpsc::channel::<u32>();
-    handle.spawn(async move {
+    gateway.spawn(async move {
         tx.send(42).unwrap();
     });
     let v = rx.recv_timeout(Duration::from_secs(1)).expect("ran");
@@ -57,9 +57,8 @@ fn worker_thread_count_honored() {
         .tokio_worker_threads(2)
         .build();
     let gateway = ZenohGateway::new(opts).expect("runtime up");
-    let handle = gateway.handle().unwrap();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
-    handle.spawn(async move {
+    gateway.spawn(async move {
         tx.send(()).unwrap();
     });
     rx.recv_timeout(Duration::from_secs(1)).expect("ran on multi-worker");
