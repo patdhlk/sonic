@@ -18,7 +18,8 @@ use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use sonic_connector_core::{
-    ConnectorError, ConnectorHealth, HealthEvent, HealthMonitor, IllegalTransition,
+    ConnectorError, ConnectorHealth, ConnectorHealthKind, HealthEvent, HealthMonitor,
+    IllegalTransition,
 };
 
 use crate::session::SessionState;
@@ -98,38 +99,76 @@ impl ZenohHealthMonitor {
         self.rx.clone()
     }
 
-    /// Apply an observed session state to the monitor. Maps the
-    /// [`SessionState`] into a [`ConnectorHealth`] target and attempts
-    /// the transition. Used by the Z4e health watcher task — each
-    /// observed change of the underlying session state pushes one
-    /// event onto the broadcast channel via [`Self::transition_to`].
+    /// Apply a single observation of the session — current state plus
+    /// the currently linked peer count — to the monitor's state
+    /// machine. Used by the Z5b health watcher task: every poll tick
+    /// produces one observation, and at most one [`HealthEvent`] hits
+    /// the broadcast channel.
     ///
-    /// Mapping (per `ARCH_0012`'s reachable edges):
+    /// Mapping (per `ARCH_0012`'s reachable edges, refined by
+    /// `REQ_0442` for the `min_peers` floor):
     ///
-    /// * `SessionState::Connecting` → `ConnectorHealth::Connecting`
-    /// * `SessionState::Alive`      → `ConnectorHealth::Up`
-    /// * `SessionState::Closed`     → `ConnectorHealth::Down`
+    /// * `SessionState::Connecting` → `ConnectorHealth::Connecting`.
+    /// * `SessionState::Alive` + `peer_count >= floor`
+    ///   (or `min_peers.is_none()`) → `ConnectorHealth::Up`.
+    /// * `SessionState::Alive` + `peer_count < floor` →
+    ///   `ConnectorHealth::Degraded { reason }`.
+    /// * `SessionState::Closed { reason }` →
+    ///   `ConnectorHealth::Down { reason }`.
     ///
     /// Illegal transitions per the health state machine (e.g. observing
-    /// `Alive` while already `Up`, or `Connecting` while `Up`) are
-    /// dropped silently — the watcher should not panic on a benign
-    /// no-op or an unreachable state-machine edge.
-    pub(crate) fn apply_state(&self, next: &SessionState) {
-        let target = match next {
+    /// `Alive` while already `Up`) are dropped silently — the watcher
+    /// should not panic on a benign no-op. The one wrinkle: the monitor
+    /// starts in `Connecting`, but the watcher's very first observation
+    /// can already imply `Degraded` (an `Alive` session whose peer count
+    /// is below the floor). `ARCH_0012` does not allow a direct
+    /// `Connecting -> Degraded` edge, so we silently bridge through
+    /// `Up` (no broadcast for the bridge step) and broadcast only the
+    /// final `Up -> Degraded` event.
+    pub(crate) fn apply_observation(
+        &self,
+        state: &SessionState,
+        peer_count: usize,
+        min_peers: Option<usize>,
+    ) {
+        let target = match state {
             SessionState::Connecting => ConnectorHealth::Connecting {
                 since: Instant::now(),
             },
-            SessionState::Alive => ConnectorHealth::Up,
+            SessionState::Alive => match min_peers {
+                Some(floor) if peer_count < floor => ConnectorHealth::Degraded {
+                    reason: format!("linked peers {peer_count} < min_peers {floor}"),
+                },
+                _ => ConnectorHealth::Up,
+            },
             SessionState::Closed { reason } => ConnectorHealth::Down {
                 reason: reason.clone(),
                 since: Instant::now(),
             },
         };
-        // Drop illegal-transition errors silently — `Up -> Up` /
-        // `Up -> Connecting` etc. are no-ops or unreachable for the
-        // watcher's caller. BroadcastClosed is impossible because the
-        // monitor holds an internal receiver clone.
-        let _ = self.transition_to(target);
+
+        // Bridge `Connecting -> Degraded` (illegal direct edge per
+        // `ARCH_0012`) by silently advancing the monitor through `Up`
+        // without broadcasting the intermediate event. The caller sees
+        // exactly one `HealthEvent`: the final `Up -> Degraded`.
+        let event = {
+            let mut guard = self.inner.lock().expect("health monitor lock not poisoned");
+            if guard.current().kind() == ConnectorHealthKind::Connecting
+                && target.kind() == ConnectorHealthKind::Degraded
+            {
+                // Best-effort bridge; if `Connecting -> Up` is somehow
+                // illegal in a future revision of the matrix, we still
+                // fall through to the final `try_transition_to` which
+                // will return an `IllegalTransition` we then drop.
+                let _ = guard.try_transition_to(ConnectorHealth::Up);
+            }
+            guard.try_transition_to(target).ok()
+        };
+        if let Some(ev) = event {
+            // BroadcastClosed is impossible because `self` holds an
+            // internal receiver clone.
+            let _ = self.tx.send(ev);
+        }
     }
 }
 

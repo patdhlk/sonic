@@ -287,34 +287,56 @@ where
         let query_reply_publishers = self.state.query_reply_publishers();
         let query_timeout = self.state.options().query_timeout;
 
-        // Z4e (REQ_0442): spawn the health watcher BEFORE the
+        // Z5b (REQ_0442): spawn the health watcher BEFORE the
         // dispatcher consumes `session`. Clone the Arcs the watcher
         // needs so the move below can take ownership of `session`.
+        //
+        // The watcher polls a combined (state, peer_count) observation
+        // every 100ms and re-emits whenever either the state changes
+        // or the peer count crosses the `min_peers` floor under
+        // `Alive`. Captures `min_peers` from options into the closure.
         let session_for_health = Arc::clone(&session);
         let health = self.state.health_arc();
         let stop_for_health = Arc::clone(&stop);
+        let min_peers = self.state.options().min_peers;
         handle.spawn(async move {
-            let mut last = session_for_health.state();
-            // Emit an initial event so subscribers observe the
-            // starting state. Drops to a no-op when the starting state
-            // does not legally follow the monitor's initial
-            // `Connecting` (e.g. `Closed` from `Connecting` is legal
-            // via the `Down` mapping; `Alive` is legal via `Up`).
-            tracing::info!(state = ?last, "zenoh health watcher started");
-            health.apply_state(&last);
+            let mut last_state = session_for_health.state();
+            let mut last_peers = session_for_health.peer_count();
+            tracing::info!(
+                state = ?last_state,
+                peers = last_peers,
+                "zenoh health watcher started"
+            );
+            // Emit the initial observation so subscribers see the
+            // starting (state, peer_count) combination.
+            health.apply_observation(&last_state, last_peers, min_peers);
             while !stop_for_health.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let current = session_for_health.state();
-                if current != last {
+                let current_state = session_for_health.state();
+                let current_peers = session_for_health.peer_count();
+                // Re-emit only when something the mapping cares about
+                // has changed: the state, or (under `Alive`) whether
+                // the peer count is on the other side of the floor.
+                let crossed_floor = match (&last_state, &current_state) {
+                    (SessionState::Alive, SessionState::Alive) => min_peers
+                        .is_some_and(|floor| {
+                            (last_peers < floor) != (current_peers < floor)
+                        }),
+                    _ => false,
+                };
+                if current_state != last_state || crossed_floor {
                     tracing::info!(
-                        from = ?last,
-                        to = ?current,
-                        "zenoh session state changed"
+                        from = ?last_state,
+                        from_peers = last_peers,
+                        to = ?current_state,
+                        to_peers = current_peers,
+                        "zenoh observation changed"
                     );
-                    health.apply_state(&current);
-                    last = current.clone();
+                    health.apply_observation(&current_state, current_peers, min_peers);
+                    last_state = current_state.clone();
+                    last_peers = current_peers;
                 }
-                if matches!(current, SessionState::Closed { .. }) {
+                if matches!(current_state, SessionState::Closed { .. }) {
                     // No further transitions are observable once the
                     // session is closed; exit so the runtime can shut
                     // down cleanly.
