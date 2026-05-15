@@ -10,6 +10,7 @@
 use std::process::Command;
 
 #[test]
+#[ignore = "requires cargo-public-api; run from ci-zenoh.yml public-api-tests job"]
 fn public_api_does_not_name_tokio_types() {
     let output = Command::new("cargo")
         .args([

@@ -80,7 +80,10 @@ jobs:
       - name: Install cargo-public-api
         run: cargo install cargo-public-api --locked
       - name: Run public-api tests
-        run: cargo test -p sonic-connector-zenoh --test no_reconnect_policy --test tokio_containment -- --test-threads=1
+        run: |
+          cargo test -p sonic-connector-zenoh \
+            --test no_reconnect_policy --test tokio_containment \
+            -- --test-threads=1 --include-ignored
 
   # 5. Connector-scoped clippy under both feature configurations. The
   #    workspace clippy job in ci.yml already covers --all-features; this

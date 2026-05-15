@@ -11,14 +11,14 @@
 # Run from the workspace root (or any directory — the script
 # `cd`s to its own parent's parent).
 #
-# Regex note: `cargo tree` indents children with multi-byte UTF-8
-# tree-drawing characters (├ └ │ ─). A byte-class like `[├└│ ]`
-# does NOT match those bytes reliably across locales. We use
-# `^[^a-zA-Z0-9]*zenoh v[0-9]` instead — anchor at start, allow any
-# non-alphanumeric prefix (spaces + UTF-8 high-bit bytes), then
-# require the literal lowercase `zenoh v<digit>`. This correctly
-# rejects the workspace-crate self-line `sonic-connector-zenoh
-# v0.1.0` (begins with alphanumeric `s`).
+# Regex note: matching against `cargo tree` output cannot rely on
+# the tree-drawing prefix — `cargo tree` may emit either multi-byte
+# UTF-8 box-drawing chars (├ └ │ ─) or plain whitespace depending on
+# terminal-detection heuristics (CI is non-tty). Instead of anchoring
+# on the prefix, we require the literal token ` zenoh v<digit>` with
+# a leading space — that space distinguishes the real `zenoh v1.x`
+# dep lines from the workspace self-line `sonic-connector-zenoh
+# v0.1.0` (no space between `sonic-connector-` and `zenoh`).
 
 set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
@@ -28,8 +28,8 @@ cd -- "${SCRIPT_DIR}/.."
 
 readonly PKG="sonic-connector-zenoh"
 readonly FEATURE="zenoh-integration"
-readonly ZENOH_RE='^[^a-zA-Z0-9]*zenoh v[0-9]'
-readonly ZENOH_V1_RE='^[^a-zA-Z0-9]*zenoh v1\.'
+readonly ZENOH_RE=' zenoh v[0-9]'
+readonly ZENOH_V1_RE=' zenoh v1\.[0-9]'
 
 printf '==> TEST_0310: default build must not link zenoh\n'
 default_tree="$(cargo tree -p "${PKG}" --no-default-features --edges normal 2>/dev/null)"
