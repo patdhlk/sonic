@@ -1,0 +1,101 @@
+name: ci-zenoh
+
+# Connector-zenoh focused CI: cross-platform matrix, dep-gating script,
+# public-api drift tests, and integration-feature builds. Complements
+# the workspace-wide ci.yml (which runs on ubuntu/macos only) with the
+# extra coverage required by the Z5 spec-completion plan.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # 1. Default-feature build + test across the three tier-1 OSes.
+  #    fail-fast disabled so macOS / Windows red doesn't mask linux green.
+  build-test-default:
+    name: build+test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build workspace
+        run: cargo build --workspace --all-targets
+      - name: Test sonic-connector-zenoh (default features)
+        run: cargo test -p sonic-connector-zenoh -- --test-threads=1
+
+  # 2. Integration-feature build on Linux only. zenoh's transport stack
+  #    pulls in extra deps under the zenoh-integration feature; we gate
+  #    this to ubuntu to keep the matrix cheap. If any apt packages turn
+  #    out to be required, add them here (currently zenoh 1.x crates do
+  #    not need additional system libs on ubuntu-latest).
+  feature-zenoh-integration-linux:
+    name: feature zenoh-integration (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test with zenoh-integration feature
+        run: cargo test -p sonic-connector-zenoh --features zenoh-integration -- --test-threads=1
+
+  # 3. Dependency gating script (TEST_0310) — asserts the connector
+  #    crate's Cargo.toml does not leak zenoh-only deps into default
+  #    features (REQ_0444 / REQ_0445).
+  dep-gating:
+    name: dep gating (TEST_0310)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run dep gating script
+        run: bash scripts/check_dep_gating.sh
+
+  # 4. Public-API drift tests (TEST_0309, TEST_0314). cargo-public-api
+  #    drives rustdoc-json via +nightly internally, so we install nightly
+  #    first and stable last — stable becomes the default toolchain for
+  #    `cargo test`, while +nightly remains available for the rustdoc
+  #    invocation cargo-public-api spawns.
+  public-api-tests:
+    name: public-api tests (TEST_0309, TEST_0314)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install nightly (for cargo-public-api rustdoc JSON)
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install stable (default for cargo test)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-public-api
+        run: cargo install cargo-public-api --locked
+      - name: Run public-api tests
+        run: cargo test -p sonic-connector-zenoh --test no_reconnect_policy --test tokio_containment -- --test-threads=1
+
+  # 5. Connector-scoped clippy under both feature configurations. The
+  #    workspace clippy job in ci.yml already covers --all-features; this
+  #    job exercises default features and zenoh-integration explicitly so
+  #    feature-gated code paths are linted in isolation.
+  clippy-zenoh:
+    name: clippy (sonic-connector-zenoh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (default features)
+        run: cargo clippy -p sonic-connector-zenoh --all-targets -- -D warnings
+      - name: Clippy (zenoh-integration feature)
+        run: cargo clippy -p sonic-connector-zenoh --all-targets --features zenoh-integration -- -D warnings
