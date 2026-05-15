@@ -9,7 +9,7 @@
 //! `register_with`, `create_writer`, `create_reader`).
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -26,11 +26,11 @@ use iceoryx2::prelude::{NodeBuilder, ipc};
 use sonic_connector_core::ConnectorError;
 use sonic_connector_transport_iox::ServiceFactory;
 
-use crate::dispatcher::{CorrelationMap, QueryReplyPublishers};
+use crate::dispatcher::{CorrelationMap, QueryReplyPublishers, SealedQueries};
 use crate::gateway::ZenohGateway;
 use crate::health::ZenohHealthMonitor;
 use crate::options::ZenohConnectorOptions;
-use crate::registry::ChannelRegistry;
+use crate::registry::{ChannelRegistry, QueryId};
 use crate::session::{SessionState, ZenohSessionLike};
 
 /// Connector-internal state shared between [`ZenohConnector`] and the
@@ -48,6 +48,15 @@ pub struct ZenohState {
     /// `Arc<ZenohState>` reaches strong-count 0, the bag drops, each
     /// handle's `Drop` impl tears down its session-side resource.
     handles: Mutex<Vec<AnyHandle>>,
+    /// Querier-side correlation IDs whose reply path is sealed
+    /// because the gateway emitted a synthetic `[0x03]` terminator
+    /// on timeout. Reply / done callbacks built inside
+    /// `spawn_query_with_timeout` consult this set BEFORE publishing
+    /// any frame and drop the frame if the id is present. Entries are
+    /// evicted by a delayed task after `effective_timeout`, so the
+    /// set is bounded by "queries that timed out within the last
+    /// eviction window." (Z5c)
+    sealed_queries: Arc<Mutex<HashSet<QueryId>>>,
 }
 
 impl std::fmt::Debug for ZenohState {
@@ -83,6 +92,7 @@ impl ZenohState {
             correlation_map: Arc::new(Mutex::new(HashMap::new())),
             query_reply_publishers: Arc::new(Mutex::new(HashMap::new())),
             handles: Mutex::new(Vec::new()),
+            sealed_queries: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -144,6 +154,16 @@ impl ZenohState {
     #[must_use]
     pub(crate) fn query_reply_publishers(&self) -> QueryReplyPublishers {
         Arc::clone(&self.query_reply_publishers)
+    }
+
+    /// Clone the sealed-queries sidecar handle. Used by
+    /// `spawn_query_with_timeout` to insert a correlation id BEFORE
+    /// publishing a synthetic `[0x03]` terminator, and consulted by
+    /// the matching `on_reply` / `on_done` closures so any
+    /// late-arriving upstream callback is silently dropped (`Z5c`).
+    #[must_use]
+    pub(crate) fn sealed_queries(&self) -> SealedQueries {
+        Arc::clone(&self.sealed_queries)
     }
 }
 
@@ -285,6 +305,7 @@ where
         let tick = self.state.options().dispatcher_tick;
         let correlation_map = self.state.correlation_map();
         let query_reply_publishers = self.state.query_reply_publishers();
+        let sealed_queries = self.state.sealed_queries();
         let query_timeout = self.state.options().query_timeout;
 
         // Z5b (REQ_0442): spawn the health watcher BEFORE the
@@ -354,6 +375,7 @@ where
                 tick,
                 correlation_map,
                 query_reply_publishers,
+                sealed_queries,
                 query_timeout,
             )
             .await;
@@ -513,7 +535,7 @@ impl<const N: usize> InboundPublish for IoxInboundPublishOwned<N> {
 use crate::dispatcher::{IoxCorrelatedPublish, IoxQuerierDrain, IoxReplyDrain};
 use crate::querier::ZenohQuerier;
 use crate::queryable::ZenohQueryable;
-use crate::registry::{CorrelatedPublish, QuerierDrain, QueryId, ReplyDrain};
+use crate::registry::{CorrelatedPublish, QuerierDrain, ReplyDrain};
 
 impl<S, C> ZenohConnector<S, C>
 where

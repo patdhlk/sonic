@@ -64,6 +64,11 @@ pub struct MockZenohSession {
     /// `on_done` callback — used to exercise the gateway's
     /// `tokio::time::timeout` enforcement path (`TEST_0307`).
     query_hangs: AtomicBool,
+    /// Test-only: callbacks captured by `query(...)` when
+    /// `query_hangs` was true at the time of the call. Keyed by the
+    /// routing's key-expression string. Used by `force_late_reply`
+    /// to exercise the gateway's late-reply dedup path (`Z5c`).
+    hung_callbacks: Mutex<HashMap<String, (PayloadSink, DoneCallback)>>,
     /// Reported peer count for the health-watcher polling path
     /// (`ZenohSessionLike::peer_count`). Defaults to `usize::MAX`
     /// so tests that don't configure `min_peers` see `Up` rather
@@ -99,6 +104,7 @@ impl MockZenohSession {
             queryables: Arc::new(Mutex::new(HashMap::new())),
             next_qable_id: AtomicU64::new(1),
             query_hangs: AtomicBool::new(false),
+            hung_callbacks: Mutex::new(HashMap::new()),
             peer_count: AtomicUsize::new(usize::MAX),
         }
     }
@@ -124,6 +130,36 @@ impl MockZenohSession {
     /// complexity onto downstream test crates.
     pub fn set_query_hangs(&self, hang: bool) {
         self.query_hangs.store(hang, Ordering::Release);
+    }
+
+    /// Test-only: simulate a late reply arriving on the
+    /// most-recently-captured callbacks for `key`. Used together with
+    /// `set_query_hangs` to exercise the gateway's late-reply dedup
+    /// path (`Z5c`).
+    ///
+    /// `payload` is passed verbatim to `on_reply`; `on_done` is fired
+    /// immediately after, mirroring the normal end-of-stream sequence
+    /// on the mock's happy path.
+    ///
+    /// Returns `true` if a captured callback pair was found and fired,
+    /// `false` if no `query_hangs`-captured pair exists for that key.
+    ///
+    /// # Panics
+    /// Panics only if the `hung_callbacks` mutex is poisoned, which
+    /// would require another thread to panic while holding the lock.
+    pub fn force_late_reply(&self, key: &str, payload: &[u8]) -> bool {
+        let entry = self
+            .hung_callbacks
+            .lock()
+            .expect("hung_callbacks poisoned")
+            .remove(key);
+        if let Some((on_reply, on_done)) = entry {
+            on_reply(payload);
+            on_done();
+            true
+        } else {
+            false
+        }
     }
 
     /// Test-only knob: override the reported peer count. Default is
@@ -288,17 +324,24 @@ impl ZenohSessionLike for MockZenohSession {
             });
         }
 
-        // Test-only: never resolve the future and never invoke
-        // callbacks so the gateway's `tokio::time::timeout` wrapper
-        // actually has something to time out on (`TEST_0307`). A bare
-        // `return Ok(())` would let the timeout see a resolved future
-        // and never fire.
+        // Test-only: never resolve the future so the gateway's
+        // `tokio::time::timeout` wrapper actually has something to
+        // time out on (`TEST_0307`). A bare `return Ok(())` would let
+        // the timeout see a resolved future and never fire.
+        //
+        // Capture the callbacks so `force_late_reply` can fire them
+        // later (`Z5c` — exercises the gateway's late-reply dedup
+        // path). We store by key-expression string — sufficient for
+        // the single-query-per-key test pattern.
         if self.query_hangs.load(Ordering::Acquire) {
-            // `on_reply` and `on_done` deliberately dropped here.
-            let _ = on_reply;
-            let _ = on_done;
             let _ = payload;
-            let _ = routing;
+            self.hung_callbacks
+                .lock()
+                .expect("hung_callbacks poisoned")
+                .insert(
+                    routing.key_expr().as_str().to_owned(),
+                    (on_reply, on_done),
+                );
             std::future::pending::<()>().await;
             unreachable!("std::future::pending() never resolves");
         }

@@ -8,7 +8,7 @@
 //! subscribe callbacks set up at `create_reader` time (see
 //! [`IoxInboundPublish`]); the loop does not iterate them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +38,14 @@ pub(crate) type CorrelationMap = Arc<Mutex<HashMap<QueryId, QueryReplier>>>;
 /// registry mutex and without juggling generics through the registry.
 pub(crate) type QueryReplyPublishers =
     Arc<Mutex<HashMap<String, Arc<dyn CorrelatedPublish>>>>;
+
+/// Sidecar set — correlation IDs whose reply path is sealed because
+/// the gateway emitted a synthetic `[0x03]` terminator on timeout.
+/// Reply / done closures in `spawn_query_with_timeout` consult this
+/// set before publishing any frame and silently drop the frame if the
+/// id is present. Entries evict after one more `effective_timeout`
+/// so the set remains bounded (`Z5c`).
+pub(crate) type SealedQueries = Arc<Mutex<HashSet<QueryId>>>;
 
 /// Maximum scratch-buffer size the dispatcher allocates per drain
 /// (heap-allocated once at loop entry). Channels with `N >
@@ -143,6 +151,7 @@ pub async fn dispatcher_loop<S>(
     tick_interval: Duration,
     correlation_map: CorrelationMap,
     query_reply_publishers: QueryReplyPublishers,
+    sealed_queries: SealedQueries,
     query_timeout: Duration,
 ) -> Result<(), ConnectorError>
 where
@@ -156,6 +165,7 @@ where
             &mut scratch,
             &correlation_map,
             &query_reply_publishers,
+            &sealed_queries,
             query_timeout,
         )
         .await;
@@ -212,6 +222,7 @@ async fn drain_outbound_once<S>(
     scratch: &mut [u8],
     correlation_map: &CorrelationMap,
     query_reply_publishers: &QueryReplyPublishers,
+    sealed_queries: &SealedQueries,
     query_timeout: Duration,
 ) where
     S: ZenohSessionLike + 'static,
@@ -269,6 +280,7 @@ async fn drain_outbound_once<S>(
                         id,
                         effective_timeout,
                         publisher,
+                        Arc::clone(sealed_queries),
                     );
                 }
             }
@@ -336,6 +348,13 @@ async fn drain_outbound_once<S>(
 /// On timeout expiry, a synthetic `[0x03]` (`FrameKind::Timeout`)
 /// frame is published on the matching `.reply.in` channel so the
 /// querier observes `QuerierEvent::Timeout`.
+///
+/// Late zenoh replies (real-session only) are filtered by the
+/// `sealed_queries` sidecar — see `on_reply` / `on_done` closures
+/// above. The timeout path seals the id BEFORE publishing the `0x03`
+/// so a racy upstream callback observes the sealed state and drops
+/// its frame. A delayed eviction task removes the id after one more
+/// `effective_timeout` so the set stays bounded (`Z5c`).
 fn spawn_query_with_timeout<S>(
     session: Arc<S>,
     routing: crate::routing::ZenohRouting,
@@ -343,6 +362,7 @@ fn spawn_query_with_timeout<S>(
     id: QueryId,
     effective_timeout: Duration,
     publisher: Arc<dyn CorrelatedPublish>,
+    sealed_queries: SealedQueries,
 ) where
     S: ZenohSessionLike + 'static,
 {
@@ -352,14 +372,34 @@ fn spawn_query_with_timeout<S>(
     // clippy::needless_pass_by_value happy and avoids one needless
     // clone on the hot path.
     let publisher_for_timeout = publisher;
+    let sealed_for_reply = Arc::clone(&sealed_queries);
+    let sealed_for_done = Arc::clone(&sealed_queries);
+    let sealed_for_evict = Arc::clone(&sealed_queries);
     tokio::spawn(async move {
         let on_reply: PayloadSink = Box::new(move |bytes: &[u8]| {
+            // Drop late replies that arrived after the gateway sealed
+            // this id on timeout. Hoist the lookup so we never hold
+            // the mutex across the publish.
+            let sealed = sealed_for_reply
+                .lock()
+                .expect("sealed_queries poisoned")
+                .contains(&id);
+            if sealed {
+                return;
+            }
             let mut framed = Vec::with_capacity(1 + bytes.len());
             framed.push(crate::session::FrameKind::Data.discriminator());
             framed.extend_from_slice(bytes);
             let _ = pub_reply.publish_with_correlation(id, &framed);
         });
         let on_done: DoneCallback = Box::new(move || {
+            let sealed = sealed_for_done
+                .lock()
+                .expect("sealed_queries poisoned")
+                .contains(&id);
+            if sealed {
+                return;
+            }
             let _ = pub_done.publish_with_correlation(
                 id,
                 &[crate::session::FrameKind::EndOfStream.discriminator()],
@@ -379,15 +419,13 @@ fn spawn_query_with_timeout<S>(
                 // the synthetic 0x03 terminator on the reply path so
                 // the querier sees `QuerierEvent::Timeout` (TEST_0307).
                 //
-                // TODO(Z4f): with RealZenohSession, an upstream reply
-                // callback may still fire AFTER this timeout, leaking a
-                // stray 0x01 / 0x02 frame on `id` and surfacing a Reply
-                // or EndOfStream event past Timeout on the querier. The
-                // mock path is unaffected because MockZenohSession
-                // resolves `session.query` deterministically inside the
-                // timeout window. Fix shape: per-correlation "sealed"
-                // flag (sidecar `HashSet<QueryId>` or a bit on the
-                // `CorrelatedPublish`) checked before publishing.
+                // CRITICAL: seal BEFORE publishing so any upstream
+                // callback racing with this branch observes the seal
+                // and drops its frame.
+                sealed_queries
+                    .lock()
+                    .expect("sealed_queries poisoned")
+                    .insert(id);
                 warn!(
                     query_id = ?id,
                     ?effective_timeout,
@@ -397,6 +435,17 @@ fn spawn_query_with_timeout<S>(
                     id,
                     &[crate::session::FrameKind::Timeout.discriminator()],
                 );
+                // Bounded eviction: drop the seal after another
+                // `effective_timeout` so the set doesn't grow without
+                // bound. Fire-and-forget — the JoinHandle is dropped.
+                let evict_after = effective_timeout;
+                let _evict = tokio::spawn(async move {
+                    tokio::time::sleep(evict_after).await;
+                    sealed_for_evict
+                        .lock()
+                        .expect("sealed_queries poisoned")
+                        .remove(&id);
+                });
             }
         }
     });
