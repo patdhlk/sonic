@@ -180,6 +180,18 @@ pub trait ZenohSessionLike: Send + Sync + 'static {
     /// transition `ConnectorHealth`.
     fn state(&self) -> SessionState;
 
+    /// Number of peers the session is currently linked to, as
+    /// observed by the implementation. Synchronous like
+    /// [`Self::state`] — pollable from the health watcher.
+    ///
+    /// `usize::MAX` is a sentinel meaning "no constraint": the
+    /// gateway treats that value as unconditionally satisfying any
+    /// `min_peers` floor, so implementations that cannot cheaply
+    /// produce a peer count may return it. `MockZenohSession`
+    /// defaults to `usize::MAX` so existing tests that don't
+    /// configure `min_peers` do not accidentally enter `Degraded`.
+    fn peer_count(&self) -> usize;
+
     /// Publish a sample on the given routing's key expression.
     fn publish(
         &self,

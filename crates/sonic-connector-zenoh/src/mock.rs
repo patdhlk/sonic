@@ -64,6 +64,11 @@ pub struct MockZenohSession {
     /// `on_done` callback — used to exercise the gateway's
     /// `tokio::time::timeout` enforcement path (`TEST_0307`).
     query_hangs: AtomicBool,
+    /// Reported peer count for the health-watcher polling path
+    /// (`ZenohSessionLike::peer_count`). Defaults to `usize::MAX`
+    /// so tests that don't configure `min_peers` see `Up` rather
+    /// than accidentally tripping into `Degraded`.
+    peer_count: AtomicUsize,
 }
 
 impl std::fmt::Debug for MockZenohSession {
@@ -94,6 +99,7 @@ impl MockZenohSession {
             queryables: Arc::new(Mutex::new(HashMap::new())),
             next_qable_id: AtomicU64::new(1),
             query_hangs: AtomicBool::new(false),
+            peer_count: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -118,6 +124,14 @@ impl MockZenohSession {
     /// complexity onto downstream test crates.
     pub fn set_query_hangs(&self, hang: bool) {
         self.query_hangs.store(hang, Ordering::Release);
+    }
+
+    /// Test-only knob: override the reported peer count. Default is
+    /// `usize::MAX` (no constraint). Set a finite value to drive the
+    /// health watcher into / out of `Degraded` against a configured
+    /// `min_peers` floor.
+    pub fn set_peer_count(&self, n: usize) {
+        self.peer_count.store(n, Ordering::Release);
     }
 
     /// Sum of subscriber callbacks across all key-expression buckets.
@@ -197,6 +211,10 @@ impl Drop for QueryableGuard {
 impl ZenohSessionLike for MockZenohSession {
     fn state(&self) -> SessionState {
         self.state.read().unwrap().clone()
+    }
+
+    fn peer_count(&self) -> usize {
+        self.peer_count.load(Ordering::Acquire)
     }
 
     async fn publish(

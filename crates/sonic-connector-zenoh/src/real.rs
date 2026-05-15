@@ -179,6 +179,21 @@ impl ZenohSessionLike for RealZenohSession {
             .clone()
     }
 
+    fn peer_count(&self) -> usize {
+        // zenoh-1.x: `Session::info()` returns `SessionInfo`; its
+        // `peers_zid()` is a `PeersZenohIdBuilder` that resolves
+        // (via `zenoh::Wait::wait`, which is synchronous and
+        // backed by `std::future::Ready` under `IntoFuture`) to a
+        // `Box<dyn Iterator<Item = ZenohId>>` over the currently
+        // linked peers. We resolve sync and count — cheap, since
+        // the iterator is over in-process runtime state.
+        //
+        // If a future zenoh API breaks this, fall back to
+        // `usize::MAX` so the connector keeps reporting `Up` rather
+        // than spuriously transitioning to `Degraded`.
+        self.inner.info().peers_zid().wait().count()
+    }
+
     async fn publish(
         &self,
         routing: &ZenohRouting,
