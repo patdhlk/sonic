@@ -746,35 +746,41 @@ land.
 
 .. test:: REQ_0441 anti-req — no ReconnectPolicy on session loss
    :id: TEST_0309
-   :status: open
+   :status: implemented
    :verifies: REQ_0441
 
    Static check that ``ZenohGateway`` exposes no
    ``ReconnectPolicy``-typed field and the
    ``ZenohConnectorOptions`` struct does not declare a
-   ``reconnect_policy`` setting. The check is a compile-fail test
-   plus a doc-test asserting the public type surface.
+   ``reconnect_policy`` setting. Realised as
+   ``crates/sonic-connector-zenoh/tests/no_reconnect_policy.rs``,
+   which shells out to ``cargo public-api`` and asserts the
+   public surface contains no ``ReconnectPolicy`` /
+   ``reconnect_policy`` identifier.
 
 .. test:: zenoh-integration feature gates the real zenoh dep
    :id: TEST_0310
-   :status: open
+   :status: implemented
    :verifies: REQ_0444, REQ_0445
 
    Build the crate twice — once with default features, once with
    ``--features zenoh-integration`` — and assert that the default
    build does not link ``zenoh`` (via ``cargo tree`` introspection)
    while the feature build does. Both builds expose
-   ``MockZenohSession``.
+   ``MockZenohSession``. Realised as ``scripts/check_dep_gating.sh``
+   invoked from the ``dep-gating`` job in
+   ``.github/workflows/ci-zenoh.yml``.
 
 .. test:: Cross-platform support
    :id: TEST_0311
-   :status: open
+   :status: implemented
    :verifies: REQ_0446
 
    CI matrix builds the crate on Linux, macOS, and Windows
    (default features) and runs ``cargo test`` on all three. No
    platform-specific compile errors; no platform-gated
-   ``#[cfg]`` paths break.
+   ``#[cfg]`` paths break. Realised as the ``build-test-default``
+   matrix job in ``.github/workflows/ci-zenoh.yml``.
 
 .. test:: Two-peer real session pub/sub
    :id: TEST_0312
@@ -800,18 +806,22 @@ land.
 
 .. test:: Tokio sidecar contained inside sonic-connector-zenoh
    :id: TEST_0314
-   :status: open
+   :status: implemented
    :verifies: REQ_0403
 
    Static check that the ``zenoh::Session`` and any tokio runtime
    handle live entirely inside the ``sonic-connector-zenoh`` crate.
    No public type exported by ``sonic-connector-zenoh`` shall name a
    ``tokio::*`` type in its signature (compile-time API surface scan).
-   At runtime, an executor unit test instantiates a ``ZenohConnector``
-   and asserts that the WaitSet thread does not contain any tokio
-   task handle attributable to the gateway sidecar (mirrors the
-   posture verified by :need:`TEST_0211` for the EtherCAT crate
-   under :need:`REQ_0321`).
+   Realised as
+   ``crates/sonic-connector-zenoh/tests/tokio_containment.rs``,
+   which shells out to ``cargo public-api`` and asserts the public
+   surface contains no ``tokio::`` identifier. The runtime piece —
+   an executor unit test asserting that the WaitSet thread does not
+   contain any tokio task handle attributable to the gateway
+   sidecar (mirrors :need:`TEST_0211` under :need:`REQ_0321`) — is
+   deferred to a Z6+ stage that lands ``sonic-executor`` task
+   introspection.
 
 ----
 

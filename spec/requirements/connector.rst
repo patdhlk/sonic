@@ -828,8 +828,9 @@ Zenoh reference connector
 
 .. req:: Tokio sidecar contained inside the Zenoh connector crate
    :id: REQ_0403
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0043
+   :links: BB_0042, BB_0044, TEST_0314
 
    The Zenoh gateway shall host the ``zenoh::Session`` and all
    Zenoh async callbacks on a tokio runtime contained inside
@@ -1056,8 +1057,9 @@ Zenoh reference connector
 
 .. req:: HealthEvent emitted on every Zenoh session transition
    :id: REQ_0442
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0045
+   :links: BB_0042, TEST_0308
 
    Every transition of the Zenoh session between alive and closed
    states observed by the gateway (including the initial
@@ -1078,8 +1080,9 @@ Zenoh reference connector
 
 .. req:: zenoh-integration cargo feature gates the real zenoh dep
    :id: REQ_0444
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0045
+   :links: BB_0040, TEST_0310
 
    The ``sonic-connector-zenoh`` crate shall expose a default-off
    ``zenoh-integration`` cargo feature. The real ``zenoh`` crate
@@ -1090,8 +1093,9 @@ Zenoh reference connector
 
 .. req:: MockZenohSession ships unfeature-gated
    :id: REQ_0445
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0045
+   :links: BB_0040, TEST_0302, TEST_0310
 
    ``MockZenohSession`` — an in-process pub/sub + query loopback
    implementation of the ``ZenohSessionLike`` trait — shall ship in
@@ -1102,8 +1106,9 @@ Zenoh reference connector
 
 .. req:: Linux, macOS, and Windows are supported host operating systems
    :id: REQ_0446
-   :status: open
+   :status: implemented
    :satisfies: FEAT_0045
+   :links: BB_0040, TEST_0311
 
    The Zenoh connector shall support Linux, macOS, and Windows as
    host operating systems for both plugin and gateway (broader than
