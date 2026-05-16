@@ -14,6 +14,10 @@ top-level features:
   infrastructure providing a static, pre-allocated, fixed-block
   ``#[global_allocator]`` for sonic binaries that require
   compile-time guarantees on memory usage. See :doc:`bounded-alloc`.
+* :need:`FEAT_0050` "Device-driver codegen toolchain" — build-time
+  layered crates that translate EtherCAT ESI XML into strongly-typed
+  Rust device drivers, consumed by ``sonic-connector-ethercat`` and
+  any other ethercrab user. See :doc:`device-codegen`.
 
 Each ``req`` directive ``:satisfies:`` one ``feat`` parent; each
 capability-cluster ``feat`` ``:satisfies:`` its top-level umbrella feature.
@@ -24,6 +28,7 @@ capability-cluster ``feat`` ``:satisfies:`` its top-level umbrella feature.
    plc-runtime
    connector
    bounded-alloc
+   device-codegen
 
 Requirements at a glance
 ------------------------

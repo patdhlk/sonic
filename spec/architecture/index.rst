@@ -14,6 +14,7 @@ detailed-design notes that predate the arc42 adoption.
    connector
    plc-runtime
    bounded-alloc
+   device-codegen
    safety
 
 Building blocks

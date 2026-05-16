@@ -11,6 +11,7 @@ Test cases verifying requirements. Each ``test`` directive
    connector
    plc-runtime
    bounded-alloc
+   device-codegen
 
 .. needtable::
    :types: test
