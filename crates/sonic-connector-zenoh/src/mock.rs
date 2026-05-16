@@ -196,12 +196,7 @@ impl MockZenohSession {
     /// Panics only if the queryables mutex is poisoned, which would
     /// require another thread to panic while holding the lock.
     pub fn queryable_count(&self) -> usize {
-        self.queryables
-            .lock()
-            .unwrap()
-            .values()
-            .map(Vec::len)
-            .sum()
+        self.queryables.lock().unwrap().values().map(Vec::len).sum()
     }
 }
 
@@ -256,11 +251,7 @@ impl ZenohSessionLike for MockZenohSession {
         self.peer_count.load(Ordering::Acquire)
     }
 
-    async fn publish(
-        &self,
-        routing: &ZenohRouting,
-        payload: &[u8],
-    ) -> Result<(), SessionError> {
+    async fn publish(&self, routing: &ZenohRouting, payload: &[u8]) -> Result<(), SessionError> {
         if !matches!(*self.state.read().unwrap(), SessionState::Alive) {
             return Err(SessionError::NotAlive {
                 reason: "mock session not alive".into(),
@@ -294,10 +285,7 @@ impl ZenohSessionLike for MockZenohSession {
         // Convert the caller's Box<dyn Fn> into an Arc<dyn Fn> so the sink
         // can be cheaply cloned during publish dispatch.
         let shared: SharedSink = Arc::from(sink);
-        let entry = SubscriberEntry {
-            id,
-            sink: shared,
-        };
+        let entry = SubscriberEntry { id, sink: shared };
         self.subscribers
             .lock()
             .unwrap()
@@ -341,10 +329,7 @@ impl ZenohSessionLike for MockZenohSession {
             self.hung_callbacks
                 .lock()
                 .expect("hung_callbacks poisoned")
-                .insert(
-                    routing.key_expr().as_str().to_owned(),
-                    (on_reply, on_done),
-                );
+                .insert(routing.key_expr().as_str().to_owned(), (on_reply, on_done));
             std::future::pending::<()>().await;
             unreachable!("std::future::pending() never resolves");
         }

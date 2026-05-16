@@ -140,12 +140,14 @@ async fn query_round_trip_to_single_queryable() {
     let _qable = session
         .declare_queryable(
             &r,
-            Box::new(|req: &[u8], replier: sonic_connector_zenoh::session::QueryReplier| {
-                let mut out = b"hello,".to_vec();
-                out.extend_from_slice(req);
-                replier.reply(&out);
-                replier.terminate();
-            }),
+            Box::new(
+                |req: &[u8], replier: sonic_connector_zenoh::session::QueryReplier| {
+                    let mut out = b"hello,".to_vec();
+                    out.extend_from_slice(req);
+                    replier.reply(&out);
+                    replier.terminate();
+                },
+            ),
         )
         .await
         .expect("queryable declared");
@@ -195,7 +197,10 @@ async fn query_with_no_queryable_calls_done_immediately() {
         .await
         .expect("query dispatched");
 
-    assert!(*done.lock().unwrap(), "on_done should fire even with no queryable");
+    assert!(
+        *done.lock().unwrap(),
+        "on_done should fire even with no queryable"
+    );
 }
 
 #[tokio::test]
@@ -289,7 +294,13 @@ async fn dropping_queryable_handle_stops_receiving_queries() {
 
     // First query: queryable fires.
     session
-        .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .query(
+            &r,
+            b"",
+            std::time::Duration::from_secs(1),
+            Box::new(|_| {}),
+            Box::new(|| {}),
+        )
         .await
         .unwrap();
     assert_eq!(*fired.lock().unwrap(), 1);
@@ -298,8 +309,18 @@ async fn dropping_queryable_handle_stops_receiving_queries() {
 
     // Second query after drop: queryable should NOT fire.
     session
-        .query(&r, b"", std::time::Duration::from_secs(1), Box::new(|_| {}), Box::new(|| {}))
+        .query(
+            &r,
+            b"",
+            std::time::Duration::from_secs(1),
+            Box::new(|_| {}),
+            Box::new(|| {}),
+        )
         .await
         .unwrap();
-    assert_eq!(*fired.lock().unwrap(), 1, "queryable should not fire after drop");
+    assert_eq!(
+        *fired.lock().unwrap(),
+        1,
+        "queryable should not fire after drop"
+    );
 }

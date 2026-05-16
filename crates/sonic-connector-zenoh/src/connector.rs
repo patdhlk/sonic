@@ -10,8 +10,8 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Type-erased owning handle for session-side declarations
@@ -202,11 +202,7 @@ where
     /// # Errors
     /// Returns `ConnectorError::Stack` wrapping any iceoryx2 node
     /// creation or tokio runtime construction failure.
-    pub fn new(
-        state: Arc<ZenohState>,
-        session: Arc<S>,
-        codec: C,
-    ) -> Result<Self, ConnectorError> {
+    pub fn new(state: Arc<ZenohState>, session: Arc<S>, codec: C) -> Result<Self, ConnectorError> {
         let node = NodeBuilder::new()
             .create::<ipc::Service>()
             .map_err(|e| ConnectorError::stack(NodeError(format!("{e:?}"))))?;
@@ -340,9 +336,7 @@ where
                 // the peer count is on the other side of the floor.
                 let crossed_floor = match (&last_state, &current_state) {
                     (SessionState::Alive, SessionState::Alive) => min_peers
-                        .is_some_and(|floor| {
-                            (last_peers < floor) != (current_peers < floor)
-                        }),
+                        .is_some_and(|floor| (last_peers < floor) != (current_peers < floor)),
                     _ => false,
                 };
                 if current_state != last_state || crossed_floor {
@@ -581,8 +575,7 @@ where
         let q_reader_gw = factory.create_raw_reader_named::<N>(&q_name)?;
         let r_writer_gw = factory.create_raw_writer_named::<N>(&r_name)?;
 
-        let q_drain: Arc<dyn QuerierDrain> =
-            Arc::new(IoxQuerierDrain::<N>::new(q_reader_gw));
+        let q_drain: Arc<dyn QuerierDrain> = Arc::new(IoxQuerierDrain::<N>::new(q_reader_gw));
 
         // Wrap the `.reply.in` publisher in an `Arc` so the registry
         // binding and the sidecar map can share it. The dispatcher's
@@ -673,8 +666,7 @@ where
         let q_publish: Arc<IoxCorrelatedPublish<N>> =
             Arc::new(IoxCorrelatedPublish::<N>::new(q_writer_gw));
         let q_publish_for_callback = Arc::clone(&q_publish);
-        let r_drain: Arc<dyn ReplyDrain> =
-            Arc::new(IoxReplyDrain::<N>::new(r_reader_gw));
+        let r_drain: Arc<dyn ReplyDrain> = Arc::new(IoxReplyDrain::<N>::new(r_reader_gw));
 
         // Wire the session's declare_queryable callback. On each
         // upstream query: mint a QueryId, stash the replier in the
@@ -683,8 +675,8 @@ where
         // and uses the correlation_map to forward replies to the
         // stashed QueryReplier.
         let correlation_map = self.state.correlation_map();
-        let on_query: crate::session::QuerySink = Box::new(
-            move |req: &[u8], replier: crate::session::QueryReplier| {
+        let on_query: crate::session::QuerySink =
+            Box::new(move |req: &[u8], replier: crate::session::QueryReplier| {
                 let id = crate::querier::mint_query_id();
                 correlation_map
                     .lock()
@@ -695,8 +687,7 @@ where
                 // errors silently — the plugin will time out anyway
                 // (REQ_0425, handled in Z3f).
                 let _ = q_publish_for_callback.publish_with_correlation(id, req);
-            },
-        );
+            });
 
         // Subscribe with the session. The session is consumed by
         // register_with — if it's already gone, we can't declare.
@@ -775,11 +766,7 @@ impl<const N: usize> IoxCorrelatedPublishOwned<N> {
 }
 
 impl<const N: usize> CorrelatedPublish for IoxCorrelatedPublishOwned<N> {
-    fn publish_with_correlation(
-        &self,
-        id: QueryId,
-        bytes: &[u8],
-    ) -> Result<(), ConnectorError> {
+    fn publish_with_correlation(&self, id: QueryId, bytes: &[u8]) -> Result<(), ConnectorError> {
         self.inner.publish_with_correlation(id, bytes)
     }
 }
@@ -800,7 +787,9 @@ struct AlreadyRegistered;
 
 impl core::fmt::Display for AlreadyRegistered {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("zenoh connector: register_with already called; session was moved into dispatcher")
+        f.write_str(
+            "zenoh connector: register_with already called; session was moved into dispatcher",
+        )
     }
 }
 

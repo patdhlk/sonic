@@ -44,8 +44,7 @@ fn query_round_trip_three_replies_then_terminate() {
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/q").unwrap());
     let desc_a =
         ChannelDescriptor::<ZenohRouting, N>::new("robot.q".to_string(), routing.clone()).unwrap();
-    let desc_b =
-        ChannelDescriptor::<ZenohRouting, N>::new("robot.q".to_string(), routing).unwrap();
+    let desc_b = ChannelDescriptor::<ZenohRouting, N>::new("robot.q".to_string(), routing).unwrap();
 
     let mut qable = conn_a
         .create_queryable::<u32, String, N>(&desc_a)

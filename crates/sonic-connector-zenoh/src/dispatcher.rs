@@ -19,8 +19,8 @@ use sonic_connector_transport_iox::{RawChannelReader, RawChannelWriter};
 use tracing::{debug, warn};
 
 use crate::registry::{
-    ChannelBinding, ChannelRegistry, CorrelatedPublish, InboundPublish, OutboundDrain, QuerierDrain,
-    QueryId, ReplyDrain,
+    ChannelBinding, ChannelRegistry, CorrelatedPublish, InboundPublish, OutboundDrain,
+    QuerierDrain, QueryId, ReplyDrain,
 };
 use crate::session::{DoneCallback, PayloadSink, QueryReplier, ZenohSessionLike};
 
@@ -36,8 +36,7 @@ pub(crate) type CorrelationMap = Arc<Mutex<HashMap<QueryId, QueryReplier>>>;
 /// `.reply.in` publisher. Lets the dispatcher's `QuerierOut` branch
 /// look up the matching reply publisher without re-entering the
 /// registry mutex and without juggling generics through the registry.
-pub(crate) type QueryReplyPublishers =
-    Arc<Mutex<HashMap<String, Arc<dyn CorrelatedPublish>>>>;
+pub(crate) type QueryReplyPublishers = Arc<Mutex<HashMap<String, Arc<dyn CorrelatedPublish>>>>;
 
 /// Sidecar set — correlation IDs whose reply path is sealed because
 /// the gateway emitted a synthetic `[0x03]` terminator on timeout.
@@ -113,7 +112,10 @@ impl<const N: usize> IoxInboundPublish<N> {
 
 impl<const N: usize> InboundPublish for IoxInboundPublish<N> {
     fn publish_bytes(&self, bytes: &[u8]) -> Result<(), ConnectorError> {
-        let writer = self.writer.lock().expect("inbound publisher mutex poisoned");
+        let writer = self
+            .writer
+            .lock()
+            .expect("inbound publisher mutex poisoned");
         writer.send_raw_bytes(bytes, [0u8; 32]).map(|_| ())
     }
 }
@@ -294,9 +296,7 @@ async fn drain_outbound_once<S>(
                         Some(crate::session::FrameKind::Data) => {
                             // Data chunk: forward body to the upstream
                             // replier under the correlation map lock.
-                            let map = correlation_map
-                                .lock()
-                                .expect("correlation map poisoned");
+                            let map = correlation_map.lock().expect("correlation map poisoned");
                             if let Some(replier) = map.get(&id) {
                                 replier.reply(&scratch[1..n]);
                             }
@@ -421,9 +421,7 @@ fn spawn_query_with_timeout<S>(
             // is a synchronous iceoryx2 call, so the lock is held for
             // the publish cost only. See `Z5c` claim-or-seal docs
             // above.
-            let sealed = sealed_for_reply
-                .lock()
-                .expect("sealed_queries poisoned");
+            let sealed = sealed_for_reply.lock().expect("sealed_queries poisoned");
             if sealed.contains(&id) {
                 return;
             }
@@ -439,9 +437,7 @@ fn spawn_query_with_timeout<S>(
             // already claimed; in that case the `0x03` has shipped
             // and we must drop our `EndOfStream` to preserve the
             // "exactly one terminator per id" invariant.
-            let mut sealed = sealed_for_done
-                .lock()
-                .expect("sealed_queries poisoned");
+            let mut sealed = sealed_for_done.lock().expect("sealed_queries poisoned");
             if !sealed.insert(id) {
                 return;
             }
@@ -450,8 +446,7 @@ fn spawn_query_with_timeout<S>(
                 &[crate::session::FrameKind::EndOfStream.discriminator()],
             );
         });
-        let query_fut =
-            session.query(&routing, &payload, effective_timeout, on_reply, on_done);
+        let query_fut = session.query(&routing, &payload, effective_timeout, on_reply, on_done);
         match tokio::time::timeout(effective_timeout, query_fut).await {
             Ok(Ok(())) => {
                 debug!(query_id = ?id, "query completed");
@@ -473,9 +468,7 @@ fn spawn_query_with_timeout<S>(
                 // that case we drop our `0x03` to preserve the
                 // "exactly one terminator per id" invariant.
                 {
-                    let mut sealed = sealed_queries
-                        .lock()
-                        .expect("sealed_queries poisoned");
+                    let mut sealed = sealed_queries.lock().expect("sealed_queries poisoned");
                     if sealed.insert(id) {
                         warn!(
                             query_id = ?id,
@@ -573,10 +566,7 @@ impl<const N: usize> IoxReplyDrain<N> {
 }
 
 impl<const N: usize> ReplyDrain for IoxReplyDrain<N> {
-    fn drain_reply(
-        &self,
-        dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+    fn drain_reply(&self, dest: &mut [u8]) -> Result<Option<(QueryId, usize)>, ConnectorError> {
         let sample_opt = {
             let reader = self.reader.lock().expect("reply drain mutex poisoned");
             reader.try_recv_into(dest)?
@@ -607,12 +597,11 @@ impl<const N: usize> IoxCorrelatedPublish<N> {
 }
 
 impl<const N: usize> CorrelatedPublish for IoxCorrelatedPublish<N> {
-    fn publish_with_correlation(
-        &self,
-        id: QueryId,
-        bytes: &[u8],
-    ) -> Result<(), ConnectorError> {
-        let writer = self.writer.lock().expect("correlated publisher mutex poisoned");
+    fn publish_with_correlation(&self, id: QueryId, bytes: &[u8]) -> Result<(), ConnectorError> {
+        let writer = self
+            .writer
+            .lock()
+            .expect("correlated publisher mutex poisoned");
         writer.send_raw_bytes(bytes, id.0).map(|_| ())
     }
 }

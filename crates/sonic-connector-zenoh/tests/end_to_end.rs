@@ -8,8 +8,7 @@ use sonic_connector_codec::JsonCodec;
 use sonic_connector_core::ChannelDescriptor;
 use sonic_connector_host::Connector;
 use sonic_connector_zenoh::{
-    KeyExprOwned, MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohRouting,
-    ZenohState,
+    KeyExprOwned, MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohRouting, ZenohState,
 };
 use sonic_executor::Executor;
 
@@ -23,16 +22,14 @@ fn pub_sub_round_trip_through_mock_session() {
         .build();
     let state = Arc::new(ZenohState::new(opts));
     let session = Arc::new(MockZenohSession::new());
-    let mut connector =
-        ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
+    let mut connector = ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/arm/joint1").unwrap());
     let desc_reader =
         ChannelDescriptor::<ZenohRouting, N>::new("robot.arm.joint1".to_string(), routing.clone())
             .unwrap();
     let desc_writer =
-        ChannelDescriptor::<ZenohRouting, N>::new("robot.arm.joint1".to_string(), routing)
-            .unwrap();
+        ChannelDescriptor::<ZenohRouting, N>::new("robot.arm.joint1".to_string(), routing).unwrap();
 
     // Create reader BEFORE writer so the session subscriber is in
     // place before the first publish reaches the dispatcher.

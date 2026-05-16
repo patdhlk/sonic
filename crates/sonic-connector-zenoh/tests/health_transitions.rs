@@ -11,9 +11,7 @@ use std::time::Duration;
 use sonic_connector_codec::JsonCodec;
 use sonic_connector_host::{Connector, HealthSubscription};
 use sonic_connector_zenoh::session::SessionState;
-use sonic_connector_zenoh::{
-    MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohState,
-};
+use sonic_connector_zenoh::{MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohState};
 use sonic_executor::Executor;
 
 #[test]
@@ -24,8 +22,7 @@ fn health_event_emitted_on_session_close() {
         .tokio_worker_threads(1)
         .build();
     let state = Arc::new(ZenohState::new(opts));
-    let mut connector =
-        ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
+    let mut connector = ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
 
     let subscription: HealthSubscription = connector.subscribe_health();
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();

@@ -34,13 +34,11 @@ pub use options::{
     Consolidation, Locator, QueryTarget, SessionMode, ZenohConnectorOptions,
     ZenohConnectorOptionsBuilder,
 };
-pub use querier::{mint_query_id, QuerierEvent, ZenohQuerier};
+pub use querier::{QuerierEvent, ZenohQuerier, mint_query_id};
 pub use queryable::ZenohQueryable;
 #[cfg(feature = "zenoh-integration")]
 pub use real::RealZenohSession;
-pub use routing::{
-    CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
-};
+pub use routing::{CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting};
 pub use session::{
     DoneCallback, FrameKind, PayloadSink, QueryReplier, QuerySink, ReplyFrame, SessionError,
     SessionState, ZenohSessionLike,

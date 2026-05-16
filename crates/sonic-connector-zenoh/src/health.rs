@@ -76,10 +76,7 @@ impl ZenohHealthMonitor {
     ///
     /// Panics if the internal mutex is poisoned by a previous
     /// panicked transition. See [`Self::current`] for the rationale.
-    pub fn transition_to(
-        &self,
-        target: ConnectorHealth,
-    ) -> Result<HealthEvent, ZenohHealthError> {
+    pub fn transition_to(&self, target: ConnectorHealth) -> Result<HealthEvent, ZenohHealthError> {
         let event = {
             let mut guard = self.inner.lock().expect("health monitor lock not poisoned");
             guard

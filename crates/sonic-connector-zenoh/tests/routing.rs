@@ -5,9 +5,7 @@
 //! created.
 
 use sonic_connector_core::Routing;
-use sonic_connector_zenoh::{
-    CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting,
-};
+use sonic_connector_zenoh::{CongestionControl, KeyExprOwned, Priority, Reliability, ZenohRouting};
 
 #[test]
 fn key_expr_round_trips_valid_strings() {
@@ -26,21 +24,30 @@ fn key_expr_rejects_empty_string() {
 fn key_expr_rejects_leading_slash() {
     let err = KeyExprOwned::try_from("/robot/arm").expect_err("leading slash rejected");
     let msg = err.to_string();
-    assert!(msg.contains("leading"), "error mentions leading-slash: {msg}");
+    assert!(
+        msg.contains("leading"),
+        "error mentions leading-slash: {msg}"
+    );
 }
 
 #[test]
 fn key_expr_rejects_trailing_slash() {
     let err = KeyExprOwned::try_from("robot/arm/").expect_err("trailing slash rejected");
     let msg = err.to_string();
-    assert!(msg.contains("trailing"), "error mentions trailing-slash: {msg}");
+    assert!(
+        msg.contains("trailing"),
+        "error mentions trailing-slash: {msg}"
+    );
 }
 
 #[test]
 fn key_expr_rejects_double_slash() {
     let err = KeyExprOwned::try_from("robot//arm").expect_err("double slash rejected");
     let msg = err.to_string();
-    assert!(msg.contains("empty chunk"), "error mentions empty chunk: {msg}");
+    assert!(
+        msg.contains("empty chunk"),
+        "error mentions empty chunk: {msg}"
+    );
 }
 
 #[test]

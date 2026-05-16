@@ -13,9 +13,7 @@ use sonic_connector_codec::JsonCodec;
 use sonic_connector_core::HealthEvent;
 use sonic_connector_host::{Connector, HealthSubscription};
 use sonic_connector_zenoh::session::SessionState;
-use sonic_connector_zenoh::{
-    MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohState,
-};
+use sonic_connector_zenoh::{MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohState};
 use sonic_executor::Executor;
 
 /// Drain one health event with a deadline.
@@ -43,8 +41,7 @@ fn min_peers_drives_degraded_transitions() {
         .min_peers(2)
         .build();
     let state = Arc::new(ZenohState::new(opts));
-    let mut connector =
-        ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
+    let mut connector = ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
 
     let subscription: HealthSubscription = connector.subscribe_health();
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
@@ -53,8 +50,8 @@ fn min_peers_drives_degraded_transitions() {
     // The watcher emits an initial event reflecting the starting
     // observation. Mock starts in `SessionState::Alive`, so the tuple
     // `(Alive, peer_count=0, min_peers=Some(2))` maps to `Degraded`.
-    let first = next_event(&subscription, Duration::from_millis(500))
-        .expect("initial Degraded event");
+    let first =
+        next_event(&subscription, Duration::from_millis(500)).expect("initial Degraded event");
     assert!(
         format!("{first:?}").contains("Degraded"),
         "initial event should be Degraded; got {first:?}"
@@ -62,8 +59,8 @@ fn min_peers_drives_degraded_transitions() {
 
     // Cross the floor upward: 0 -> 2 peers should yield Up.
     session.set_peer_count(2);
-    let up_event = next_event(&subscription, Duration::from_millis(500))
-        .expect("Degraded -> Up event");
+    let up_event =
+        next_event(&subscription, Duration::from_millis(500)).expect("Degraded -> Up event");
     assert!(
         format!("{up_event:?}").contains("Up"),
         "expected Up; got {up_event:?}"
@@ -71,8 +68,8 @@ fn min_peers_drives_degraded_transitions() {
 
     // Cross the floor downward: 2 -> 1 peers should yield Degraded.
     session.set_peer_count(1);
-    let degraded_event = next_event(&subscription, Duration::from_millis(500))
-        .expect("Up -> Degraded event");
+    let degraded_event =
+        next_event(&subscription, Duration::from_millis(500)).expect("Up -> Degraded event");
     assert!(
         format!("{degraded_event:?}").contains("Degraded"),
         "expected Degraded; got {degraded_event:?}"
@@ -82,8 +79,8 @@ fn min_peers_drives_degraded_transitions() {
     session.set_state(SessionState::Closed {
         reason: "test".into(),
     });
-    let down_event = next_event(&subscription, Duration::from_millis(500))
-        .expect("Degraded -> Down event");
+    let down_event =
+        next_event(&subscription, Duration::from_millis(500)).expect("Degraded -> Down event");
     assert!(
         format!("{down_event:?}").contains("Down"),
         "expected Down; got {down_event:?}"

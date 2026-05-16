@@ -60,8 +60,9 @@ async fn test_0312_two_peer_real_session() {
     let mut conn_b = ZenohConnector::new(state_b, session_b, JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("test/0312/q").unwrap());
-    let desc_a = ChannelDescriptor::<ZenohRouting, N>::new("test.0312".to_string(), routing.clone())
-        .unwrap();
+    let desc_a =
+        ChannelDescriptor::<ZenohRouting, N>::new("test.0312".to_string(), routing.clone())
+            .unwrap();
     let desc_b =
         ChannelDescriptor::<ZenohRouting, N>::new("test.0312".to_string(), routing).unwrap();
 
@@ -113,7 +114,10 @@ async fn test_0312_two_peer_real_session() {
     })
     .await
     .unwrap();
-    assert!(received.is_some(), "queryable did not receive query within 5s");
+    assert!(
+        received.is_some(),
+        "queryable did not receive query within 5s"
+    );
 
     let observed = tokio::task::spawn_blocking(move || {
         let mut reply = None;

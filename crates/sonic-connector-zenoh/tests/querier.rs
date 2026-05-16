@@ -3,7 +3,7 @@
 //! construction, `QueryId` minting, and the `QuerierEvent` decoding
 //! logic in isolation.
 
-use sonic_connector_zenoh::querier::{mint_query_id, ZeroedMinter};
+use sonic_connector_zenoh::querier::{ZeroedMinter, mint_query_id};
 use sonic_connector_zenoh::registry::QueryId;
 
 #[test]

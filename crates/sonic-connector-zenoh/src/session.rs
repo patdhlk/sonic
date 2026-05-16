@@ -154,8 +154,8 @@ impl<'a> ReplyFrame<'a> {
         if envelope.is_empty() {
             return Err(ReplyFrameError::EmptyEnvelope);
         }
-        let kind = FrameKind::from_byte(envelope[0])
-            .ok_or(ReplyFrameError::UnknownKind(envelope[0]))?;
+        let kind =
+            FrameKind::from_byte(envelope[0]).ok_or(ReplyFrameError::UnknownKind(envelope[0]))?;
         Ok(Self {
             kind,
             body: &envelope[1..],

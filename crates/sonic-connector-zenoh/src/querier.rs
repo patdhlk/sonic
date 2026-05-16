@@ -100,11 +100,7 @@ where
 {
     /// Construct a querier from raw iox handles. Called only by the
     /// connector's `create_querier` impl.
-    pub(crate) fn new(
-        writer: RawChannelWriter<N>,
-        reader: RawChannelReader<N>,
-        codec: C,
-    ) -> Self {
+    pub(crate) fn new(writer: RawChannelWriter<N>, reader: RawChannelReader<N>, codec: C) -> Self {
         Self {
             writer,
             reader,

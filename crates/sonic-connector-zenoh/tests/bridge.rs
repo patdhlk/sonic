@@ -34,7 +34,9 @@ fn outbound_bridge_returns_message_on_backpressure() {
     let bridge: OutboundBridge<String> = OutboundBridge::new(1);
     bridge.try_send("first".into()).unwrap();
 
-    let err = bridge.try_send("dropped".into()).expect_err("over capacity");
+    let err = bridge
+        .try_send("dropped".into())
+        .expect_err("over capacity");
     let recovered = err.into_inner();
     assert_eq!(recovered, "dropped");
 }

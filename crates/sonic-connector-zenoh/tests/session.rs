@@ -19,9 +19,9 @@ fn frame_kind_byte_round_trips() {
 fn frame_kind_byte_values_are_stable() {
     // REQ_0424 / ADR_0043 fix these byte values on the wire — do not
     // re-number without amending the spec.
-    assert_eq!(FrameKind::Data.discriminator(),        0x01);
+    assert_eq!(FrameKind::Data.discriminator(), 0x01);
     assert_eq!(FrameKind::EndOfStream.discriminator(), 0x02);
-    assert_eq!(FrameKind::Timeout.discriminator(),     0x03);
+    assert_eq!(FrameKind::Timeout.discriminator(), 0x03);
 }
 
 #[test]
@@ -111,5 +111,7 @@ fn session_state_variants_compile() {
     use sonic_connector_zenoh::SessionState;
     let _ = SessionState::Connecting;
     let _ = SessionState::Alive;
-    let _ = SessionState::Closed { reason: "test".into() };
+    let _ = SessionState::Closed {
+        reason: "test".into(),
+    };
 }

@@ -31,8 +31,7 @@ fn public_api_does_not_name_tokio_types() {
         String::from_utf8_lossy(&output.stderr)
     );
     let api = String::from_utf8_lossy(&output.stdout);
-    let leaks: Vec<&str> =
-        api.lines().filter(|l| l.contains("tokio::")).collect();
+    let leaks: Vec<&str> = api.lines().filter(|l| l.contains("tokio::")).collect();
     assert!(
         leaks.is_empty(),
         "REQ_0403 violated: public API names tokio types:\n{}",

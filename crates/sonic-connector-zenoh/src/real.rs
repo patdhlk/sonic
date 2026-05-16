@@ -194,11 +194,7 @@ impl ZenohSessionLike for RealZenohSession {
         self.inner.info().peers_zid().wait().count()
     }
 
-    async fn publish(
-        &self,
-        routing: &ZenohRouting,
-        payload: &[u8],
-    ) -> Result<(), SessionError> {
+    async fn publish(&self, routing: &ZenohRouting, payload: &[u8]) -> Result<(), SessionError> {
         let key = routing.key_expr().as_str().to_owned();
         let publisher = {
             let mut map = self.publishers.lock().await;
@@ -327,9 +323,7 @@ impl ZenohSessionLike for RealZenohSession {
 
                 let replier = QueryReplier {
                     reply: Box::new(move |body: &[u8]| {
-                        let guard = query_for_reply
-                            .lock()
-                            .expect("query lock not poisoned");
+                        let guard = query_for_reply.lock().expect("query lock not poisoned");
                         if let Some(q) = guard.as_ref() {
                             let reply_builder = q.reply(q.key_expr().clone(), body.to_vec());
                             let _ = reply_builder.wait();

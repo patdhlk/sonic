@@ -104,7 +104,10 @@ fn registry_iter_preserves_insertion_order() {
             )
             .unwrap();
     }
-    let names: Vec<_> = registry.iter().map(|e| e.descriptor_name.as_ref()).collect();
+    let names: Vec<_> = registry
+        .iter()
+        .map(|e| e.descriptor_name.as_ref())
+        .collect();
     assert_eq!(names, ["alpha", "beta", "gamma", "delta"]);
 }
 
@@ -135,7 +138,10 @@ fn duplicate_name_returns_error() {
         )
         .expect_err("dup rejected");
     let msg = err.to_string();
-    assert!(msg.contains("robot/arm"), "error names the duplicate: {msg}");
+    assert!(
+        msg.contains("robot/arm"),
+        "error names the duplicate: {msg}"
+    );
 }
 
 #[test]
@@ -176,10 +182,7 @@ impl QuerierDrain for NullQuerierDrain {
 
 struct NullReplyDrain;
 impl ReplyDrain for NullReplyDrain {
-    fn drain_reply(
-        &self,
-        _dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError> {
+    fn drain_reply(&self, _dest: &mut [u8]) -> Result<Option<(QueryId, usize)>, ConnectorError> {
         Ok(None)
     }
 }
@@ -188,11 +191,7 @@ struct RecordingCorrelatedPublish {
     seen: Mutex<Vec<(QueryId, Vec<u8>)>>,
 }
 impl CorrelatedPublish for RecordingCorrelatedPublish {
-    fn publish_with_correlation(
-        &self,
-        id: QueryId,
-        bytes: &[u8],
-    ) -> Result<(), ConnectorError> {
+    fn publish_with_correlation(&self, id: QueryId, bytes: &[u8]) -> Result<(), ConnectorError> {
         self.seen.lock().unwrap().push((id, bytes.to_vec()));
         Ok(())
     }
@@ -262,15 +261,18 @@ fn registry_records_queryable_reply_out_binding() {
         )
         .expect("registered");
     let entry = registry.iter().next().unwrap();
-    assert!(matches!(entry.binding, ChannelBinding::QueryableReplyOut(_)));
+    assert!(matches!(
+        entry.binding,
+        ChannelBinding::QueryableReplyOut(_)
+    ));
 }
 
 #[test]
 fn query_id_round_trips_through_correlation_id_bytes() {
     let bytes = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-        0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-        0x1D, 0x1E, 0x1F, 0x20,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20,
     ];
     let id = QueryId(bytes);
     assert_eq!(id.0, bytes);

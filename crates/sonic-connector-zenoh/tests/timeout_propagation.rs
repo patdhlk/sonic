@@ -38,11 +38,8 @@ fn query_timeout_emits_synthetic_terminator() {
     let mut connector = ZenohConnector::new(state, session, JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/timeout").unwrap());
-    let desc = ChannelDescriptor::<ZenohRouting, N>::new(
-        "robot.timeout".to_string(),
-        routing,
-    )
-    .unwrap();
+    let desc =
+        ChannelDescriptor::<ZenohRouting, N>::new("robot.timeout".to_string(), routing).unwrap();
     let mut querier = connector.create_querier::<u32, String, N>(&desc).unwrap();
 
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
@@ -84,11 +81,8 @@ fn per_call_timeout_overrides_default() {
     let mut connector = ZenohConnector::new(state, session, JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/pcto").unwrap());
-    let desc = ChannelDescriptor::<ZenohRouting, N>::new(
-        "robot.pcto".to_string(),
-        routing,
-    )
-    .unwrap();
+    let desc =
+        ChannelDescriptor::<ZenohRouting, N>::new("robot.pcto".to_string(), routing).unwrap();
     let mut querier = connector.create_querier::<u32, String, N>(&desc).unwrap();
 
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();
@@ -130,11 +124,8 @@ fn per_call_timeout_zero_uses_default() {
     let mut connector = ZenohConnector::new(state, session, JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/dflt").unwrap());
-    let desc = ChannelDescriptor::<ZenohRouting, N>::new(
-        "robot.dflt".to_string(),
-        routing,
-    )
-    .unwrap();
+    let desc =
+        ChannelDescriptor::<ZenohRouting, N>::new("robot.dflt".to_string(), routing).unwrap();
     let mut querier = connector.create_querier::<u32, String, N>(&desc).unwrap();
 
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();

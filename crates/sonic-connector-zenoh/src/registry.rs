@@ -107,10 +107,8 @@ pub trait QuerierDrain: Send + Sync {
     /// and the envelope's `reserved` header word (`0` = use connector
     /// default; non-zero = per-call timeout in milliseconds —
     /// `REQ_0425`). `Ok(None)` if no envelope was pending.
-    fn drain_query(
-        &self,
-        dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize, u32)>, ConnectorError>;
+    fn drain_query(&self, dest: &mut [u8])
+    -> Result<Option<(QueryId, usize, u32)>, ConnectorError>;
 }
 
 /// Gateway-side drain for the queryable's reply-out path.
@@ -126,10 +124,7 @@ pub trait ReplyDrain: Send + Sync {
     /// with the [`QueryId`] from the envelope's `correlation_id` field
     /// and the number of payload bytes copied. `Ok(None)` if no
     /// envelope was pending.
-    fn drain_reply(
-        &self,
-        dest: &mut [u8],
-    ) -> Result<Option<(QueryId, usize)>, ConnectorError>;
+    fn drain_reply(&self, dest: &mut [u8]) -> Result<Option<(QueryId, usize)>, ConnectorError>;
 }
 
 /// Gateway-side publish with an explicit `correlation_id`.
@@ -141,11 +136,7 @@ pub trait ReplyDrain: Send + Sync {
 pub trait CorrelatedPublish: Send + Sync {
     /// Publish `bytes` verbatim, stamping the envelope's
     /// `correlation_id` field with `id`.
-    fn publish_with_correlation(
-        &self,
-        id: QueryId,
-        bytes: &[u8],
-    ) -> Result<(), ConnectorError>;
+    fn publish_with_correlation(&self, id: QueryId, bytes: &[u8]) -> Result<(), ConnectorError>;
 }
 
 /// Channel ↔ iceoryx2 binding. Sealed enum opaque to user code; the
@@ -180,15 +171,9 @@ impl fmt::Debug for ChannelBinding {
             Self::Outbound(_) => f.write_str("Outbound(<dyn OutboundDrain>)"),
             Self::Inbound(_) => f.write_str("Inbound(<dyn InboundPublish>)"),
             Self::QuerierOut(_) => f.write_str("QuerierOut(<dyn QuerierDrain>)"),
-            Self::QuerierReplyIn(_) => {
-                f.write_str("QuerierReplyIn(<dyn CorrelatedPublish>)")
-            }
-            Self::QueryableQueryIn(_) => {
-                f.write_str("QueryableQueryIn(<dyn CorrelatedPublish>)")
-            }
-            Self::QueryableReplyOut(_) => {
-                f.write_str("QueryableReplyOut(<dyn ReplyDrain>)")
-            }
+            Self::QuerierReplyIn(_) => f.write_str("QuerierReplyIn(<dyn CorrelatedPublish>)"),
+            Self::QueryableQueryIn(_) => f.write_str("QueryableQueryIn(<dyn CorrelatedPublish>)"),
+            Self::QueryableReplyOut(_) => f.write_str("QueryableReplyOut(<dyn ReplyDrain>)"),
         }
     }
 }

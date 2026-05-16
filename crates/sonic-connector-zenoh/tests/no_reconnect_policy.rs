@@ -34,8 +34,7 @@ fn public_api_does_not_mention_reconnect_policy() {
     let api = String::from_utf8_lossy(&output.stdout);
     let needles = ["ReconnectPolicy", "reconnect_policy"];
     for needle in needles {
-        let hits: Vec<&str> =
-            api.lines().filter(|l| l.contains(needle)).collect();
+        let hits: Vec<&str> = api.lines().filter(|l| l.contains(needle)).collect();
         assert!(
             hits.is_empty(),
             "REQ_0441 violated: public API mentions '{needle}':\n{}",

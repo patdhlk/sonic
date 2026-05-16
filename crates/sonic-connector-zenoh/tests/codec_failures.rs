@@ -9,8 +9,7 @@ use sonic_connector_codec::JsonCodec;
 use sonic_connector_core::{ChannelDescriptor, ConnectorError};
 use sonic_connector_zenoh::registry::QueryId;
 use sonic_connector_zenoh::{
-    KeyExprOwned, MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohRouting,
-    ZenohState,
+    KeyExprOwned, MockZenohSession, ZenohConnector, ZenohConnectorOptions, ZenohRouting, ZenohState,
 };
 
 const TINY: usize = 4; // 4-byte channel — any non-trivial JSON overflows.
@@ -20,8 +19,7 @@ fn querier_send_overflow_returns_payload_overflow() {
     let opts = ZenohConnectorOptions::builder().build();
     let state = Arc::new(ZenohState::new(opts));
     let session = Arc::new(MockZenohSession::new());
-    let connector =
-        ZenohConnector::new(state, session, JsonCodec).expect("constructable");
+    let connector = ZenohConnector::new(state, session, JsonCodec).expect("constructable");
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/q").unwrap());
     let desc =
@@ -35,7 +33,10 @@ fn querier_send_overflow_returns_payload_overflow() {
         .send(&"a long enough string".to_string())
         .expect_err("overflow");
     assert!(
-        matches!(err, ConnectorError::PayloadOverflow { .. } | ConnectorError::Codec { .. }),
+        matches!(
+            err,
+            ConnectorError::PayloadOverflow { .. } | ConnectorError::Codec { .. }
+        ),
         "expected codec/overflow error, got {err:?}"
     );
 }
@@ -45,8 +46,7 @@ fn queryable_reply_overflow_returns_payload_overflow() {
     let opts = ZenohConnectorOptions::builder().build();
     let state = Arc::new(ZenohState::new(opts));
     let session = Arc::new(MockZenohSession::new());
-    let connector =
-        ZenohConnector::new(state, session, JsonCodec).expect("constructable");
+    let connector = ZenohConnector::new(state, session, JsonCodec).expect("constructable");
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/q").unwrap());
     let desc =
@@ -61,7 +61,10 @@ fn queryable_reply_overflow_returns_payload_overflow() {
         .reply(synthetic_id, &"a long enough string".to_string())
         .expect_err("overflow");
     assert!(
-        matches!(err, ConnectorError::PayloadOverflow { .. } | ConnectorError::Codec { .. }),
+        matches!(
+            err,
+            ConnectorError::PayloadOverflow { .. } | ConnectorError::Codec { .. }
+        ),
         "expected codec/overflow error, got {err:?}"
     );
 }

@@ -40,11 +40,8 @@ fn late_reply_after_timeout_is_dropped() {
     let mut connector = ZenohConnector::new(state, Arc::clone(&session), JsonCodec).unwrap();
 
     let routing = ZenohRouting::new(KeyExprOwned::try_from("robot/late").unwrap());
-    let desc = ChannelDescriptor::<ZenohRouting, N>::new(
-        "robot.late".to_string(),
-        routing,
-    )
-    .unwrap();
+    let desc =
+        ChannelDescriptor::<ZenohRouting, N>::new("robot.late".to_string(), routing).unwrap();
     let mut querier = connector.create_querier::<u32, String, N>(&desc).unwrap();
 
     let mut exec = Executor::builder().worker_threads(0).build().unwrap();

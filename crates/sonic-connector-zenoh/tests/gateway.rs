@@ -61,5 +61,6 @@ fn worker_thread_count_honored() {
     gateway.spawn(async move {
         tx.send(()).unwrap();
     });
-    rx.recv_timeout(Duration::from_secs(1)).expect("ran on multi-worker");
+    rx.recv_timeout(Duration::from_secs(1))
+        .expect("ran on multi-worker");
 }

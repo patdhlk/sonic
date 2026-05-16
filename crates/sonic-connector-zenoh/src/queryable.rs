@@ -34,11 +34,7 @@ where
 {
     /// Construct a queryable from raw iox handles. Called only by the
     /// connector's `create_queryable` impl.
-    pub(crate) fn new(
-        reader: RawChannelReader<N>,
-        writer: RawChannelWriter<N>,
-        codec: C,
-    ) -> Self {
+    pub(crate) fn new(reader: RawChannelReader<N>, writer: RawChannelWriter<N>, codec: C) -> Self {
         Self {
             reader,
             writer,
@@ -60,7 +56,9 @@ where
             return Ok(None);
         };
         let id = QueryId(sample.correlation_id);
-        let value: Q = self.codec.decode(&self.scratch_recv[..sample.payload_len])?;
+        let value: Q = self
+            .codec
+            .decode(&self.scratch_recv[..sample.payload_len])?;
         Ok(Some((id, value)))
     }
 
