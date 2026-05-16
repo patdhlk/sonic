@@ -473,25 +473,33 @@ Scan-cycle observability
 
 .. req:: Per-task latency percentiles
    :id: REQ_0100
-   :status: open
+   :status: draft
    :satisfies: FEAT_0021
 
    The runtime shall report p50, p95, and p99 execute-duration percentiles
    per registered task, computed over a sliding window whose size is
    configurable at ``Executor::build`` time.
 
+   Percentile estimation shall use a fixed-bucket log-linear histogram
+   covering the value range 100 ns … 10 s with at least three buckets
+   per decade (yielding ≤ 1% relative error at bucket centroids). The
+   bucket layout shall be fixed at compile time so the per-sample update
+   path is allocation-free; see :need:`REQ_0104` and :need:`ADR_0060`.
+
 .. req:: Per-task maximum jitter
    :id: REQ_0101
-   :status: open
+   :status: draft
    :satisfies: FEAT_0021
 
    The runtime shall report the maximum observed jitter — defined as the
    absolute difference between actual and declared scan period — per
-   cyclic task.
+   cyclic task, computed over the same sliding window as
+   :need:`REQ_0100`. Lifetime maxima are out of scope; the reported value
+   ages out with the window.
 
 .. req:: Per-task overrun counter
    :id: REQ_0102
-   :status: open
+   :status: draft
    :satisfies: FEAT_0021
 
    The runtime shall expose a monotonic counter per task that increments
@@ -499,12 +507,42 @@ Scan-cycle observability
 
 .. req:: Statistics query API
    :id: REQ_0103
-   :status: open
+   :status: draft
    :satisfies: FEAT_0021
 
-   Cycle-cycle statistics shall be available both as Observer callbacks
-   (push) and as a query API on ``Executor`` (pull) so monitoring agents
-   can sample at their own cadence.
+   Cycle-cycle statistics shall be available via two distinct paths:
+
+   * **Push** — the ``Observer`` trait shall expose an
+     ``on_cycle_stats(&CycleObservation)`` callback (provided as a no-op
+     default for backward compatibility) that fires once per completed
+     scan cycle with the raw per-cycle observation (``task_id``,
+     ``period_ns``, ``actual_period_ns``, ``jitter_ns``, ``took_ns``).
+     The push path delivers raw samples, not aggregates.
+   * **Pull** — ``Executor::stats_snapshot()`` shall return a borrowed
+     view of the current per-task aggregates (``p50``, ``p95``, ``p99``,
+     ``max_jitter_ns``, ``overrun_count``), readable concurrently with
+     dispatch.
+
+   Both paths shall be allocation-free on the runtime side (see
+   :need:`REQ_0104`); allocations on the consumer side are out of scope.
+
+.. req:: Allocation-free telemetry update
+   :id: REQ_0104
+   :status: draft
+   :satisfies: FEAT_0021
+   :refines: REQ_0060
+
+   The runtime's per-sample telemetry update path — the code that runs
+   inside the dispatch loop's timing hooks to update the histogram,
+   max-jitter, and overrun counter — shall perform zero heap allocations
+   and shall complete in bounded time.
+
+   The update path's worst-case runtime shall be dominated by the
+   histogram bucket-index computation (a ``log2``-style lookup, no loops
+   over samples) and atomic updates to the bucket counter plus the
+   max-jitter and overrun fields. The verification harness mirrors
+   :need:`TEST_0170` (``CountingAllocator`` covering pool worker
+   threads); see :need:`TEST_0194`.
 
 PREEMPT_RT validation
 ~~~~~~~~~~~~~~~~~~~~~
@@ -520,31 +558,71 @@ PREEMPT_RT validation
 
 .. req:: Documented worst-case jitter
    :id: REQ_0110
-   :status: open
+   :status: draft
    :satisfies: FEAT_0022
 
-   The runtime shall ship a documented worst-case jitter envelope on at
-   least one PREEMPT_RT Linux configuration, including the kernel version,
-   isolation flags (``isolcpus``, ``nohz_full``), CPU model, and load
-   profile under which the envelope holds.
+   The repository shall ship a versioned document
+   (``spec/safety/preempt-rt-envelope.rst`` or sibling) recording an
+   observed worst-case jitter envelope on at least one PREEMPT_RT Linux
+   configuration. The document shall record: kernel version (e.g.
+   ``6.6.0-rt8``), isolation flags applied (``isolcpus``, ``nohz_full``,
+   ``rcu_nocbs``), CPU model and core-pinning layout, load profile
+   selected (see :need:`REQ_0111`), and the observed p50 / p95 / p99 /
+   max jitter values per task as reported by :need:`REQ_0100` and
+   :need:`REQ_0101`.
 
 .. req:: Cyclictest-style benchmark harness
    :id: REQ_0111
-   :status: open
+   :status: draft
    :satisfies: FEAT_0022
 
-   The repository shall include a benchmark harness that exercises the
-   dispatch path under a configured load and emits per-cycle latency
-   distributions in a machine-readable form.
+   The repository shall include a benchmark harness, packaged as a
+   cargo binary under ``xtask/preempt-rt/``, that exercises the
+   ``sonic-executor`` dispatch path under a configured load profile and
+   emits per-cycle latency observations as NDJSON to stdout.
 
-.. req:: CI regression gate on jitter
+   Each NDJSON record shall conform to the schema
+   ``{ ts_ns: u64, task_id: u32, period_ns: u64, actual_period_ns: u64,
+   jitter_ns: i64, took_ns: u64 }`` and shall be emitted once per
+   completed scan cycle.
+
+   The harness shall offer at least three selectable load profiles:
+
+   * ``idle`` — no co-resident load; baseline measurement.
+   * ``cpu-stress`` — ``stress-ng --cpu N``-style background load on
+     non-isolated cores.
+   * ``cyclictest-coexist`` — runs alongside ``cyclictest`` so the two
+     measurements can be cross-checked.
+
+.. req:: Documented reproducer procedure
    :id: REQ_0112
-   :status: open
+   :status: draft
    :satisfies: FEAT_0022
 
-   A CI job shall run the benchmark harness on a dedicated PREEMPT_RT
-   runner and shall fail the build if the observed jitter envelope
-   exceeds the declared threshold.
+   The repository shall ship a documented procedure
+   (``docs/preempt-rt-procedure.md``) by which any maintainer with
+   access to a PREEMPT_RT-equipped Linux host can reproduce the
+   :need:`REQ_0110` envelope. The procedure shall be runnable from a
+   single ``cargo xtask preempt-rt-bench`` invocation given a
+   pre-installed PREEMPT_RT kernel and the documented isolation flags.
+
+   A continuous CI gate on jitter is explicitly **not** required by
+   this REQ. See :need:`ADR_0061` for the rationale (no persistent
+   self-hosted RT runner; cloud GH runners cannot guarantee
+   PREEMPT_RT).
+
+.. req:: Harness consumes runtime telemetry
+   :id: REQ_0113
+   :status: draft
+   :satisfies: FEAT_0022
+   :refines: REQ_0103
+
+   The benchmark harness (:need:`REQ_0111`) shall obtain its per-cycle
+   observations exclusively via the ``Observer::on_cycle_stats`` push
+   callback defined in :need:`REQ_0103`. The harness shall not
+   instantiate a parallel timing path (no direct ``Instant::now``
+   polling around ``execute``); what the harness measures is what the
+   runtime would report in production.
 
 Fieldbus integration interface
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

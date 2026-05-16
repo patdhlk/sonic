@@ -229,3 +229,274 @@ Implementation
      run_n(10)) / (100 - 10)`` separates setup-phase
      allocations from steady-state allocations. See
      :need:`TEST_0170`.
+
+----
+
+Scan-cycle observability
+------------------------
+
+Detailed design for the **scan-cycle observability** sub-feature
+(:need:`FEAT_0021`). Two structural pieces: a fixed-bucket histogram
+for percentile estimation (chosen for its allocation-free, bounded-time
+per-sample update path), and per-task aggregate slots allocated at
+``Executor::build`` time.
+
+.. arch-decision:: Fixed-bucket histogram for percentile estimation
+   :id: ADR_0060
+   :status: open
+   :refines: REQ_0100
+
+   **Context.** :need:`REQ_0100` requires p50 / p95 / p99
+   execute-duration percentiles per task over a sliding window, and
+   :need:`REQ_0104` requires the update path to be allocation-free with
+   bounded per-sample latency. A window-of-raw-samples approach (keep
+   the last N samples, sort on query) is allocation-free if N is fixed
+   at build time but pays O(N log N) on every query. Streaming sketches
+   (t-digest, CKMS) give tight p99 accuracy but their compaction step
+   is amortised, not bounded, and they reshape memory as data arrives.
+
+   **Decision.** Use a fixed-bucket log-linear histogram covering the
+   value range 100 ns … 10 s with at least three buckets per decade
+   (eight decades × three buckets ≈ 24 active buckets, padded to a
+   power of two for cheap indexing). The bucket layout is fixed at
+   compile time as a ``const`` table; the per-sample update is a
+   ``log2``-style index computation plus an atomic increment.
+   Percentile queries scan the bucket array in O(B) where B is
+   constant (~32). Sliding-window behaviour is implemented as a small
+   ring of histogram snapshots (size = window-count divided by
+   snapshot period); ageing-out is a snapshot subtraction.
+
+   **Alternatives considered.**
+
+   * *Exact sliding window of raw samples.* Allocation-free if the
+     ring is pre-allocated, but percentile query is O(N log N) and
+     the ring must be sized for the worst case (~1 MB per task at
+     100 k samples vs ~1 kB for the histogram). Rejected for memory
+     pressure under many-task configurations.
+   * *t-digest / CKMS streaming sketch.* Tighter p99 accuracy but
+     compaction is amortised; worst-case per-sample latency is not
+     bounded. Rejected because the per-sample update is on the
+     dispatch hot path.
+
+   **Consequences.**
+
+   ✅ Per-sample update is O(1) and allocation-free
+   (per :need:`REQ_0104`).
+   ✅ Per-task memory footprint is bounded and known at build time
+   (~1 kB / task for the histogram + snapshots).
+   ❌ Percentile values are bucket-quantised — relative accuracy is
+   bounded by bucket width (~33% within a single bucket, ≤ 1% at
+   the bucket centroid). Acceptable for soft-RT telemetry; the
+   :need:`REQ_0111` harness exposes raw samples for finer offline
+   analysis when needed.
+
+.. building-block:: Per-task cycle statistics
+   :id: BB_0050
+   :status: open
+   :implements: REQ_0100
+   :refines: ADR_0060
+
+   ``CycleStats`` — per-task statistics owned by ``Executor``,
+   allocated once at ``Executor::build`` time. Three fields:
+
+   * ``hist: Histogram`` — fixed-bucket histogram of execute durations
+     per :need:`ADR_0060`.
+   * ``max_jitter_ns: AtomicU64`` — windowed maximum of
+     ``|actual_period - declared_period|`` (per :need:`REQ_0101`).
+   * ``overrun_count: AtomicU64`` — monotonic counter, incremented when
+     a scan-cycle exceeds the declared period (per :need:`REQ_0102`).
+
+   One ``CycleStats`` per registered task; the array is sized at
+   ``Executor::build``. Update paths use relaxed atomic stores so
+   workers do not synchronise on the stats field.
+
+.. building-block:: Statistics snapshot view
+   :id: BB_0051
+   :status: open
+   :implements: REQ_0103
+   :refines: ADR_0060
+
+   ``StatsSnapshot`` — borrowed view returned by the pull API
+   (``Executor::stats_snapshot``). Per-task entries carry
+   ``{ task_id, p50_ns, p95_ns, p99_ns, max_jitter_ns,
+   overrun_count }`` computed from the matching :need:`BB_0050` at
+   the moment of the call. The snapshot itself is a thin slice over
+   pre-allocated buffers on ``Executor``; the caller may clone it for
+   off-stack consumption but the runtime side never allocates.
+
+.. impl:: Stats module — sonic-executor/src/stats/
+   :id: IMPL_0070
+   :status: open
+   :implements: BB_0050, BB_0051
+   :refines: REQ_0100
+
+   Concrete Rust changes that realise :need:`BB_0050` and
+   :need:`BB_0051`.
+
+   **New module ``crates/sonic-executor/src/stats/``**
+
+   * ``mod.rs`` — public re-exports (``CycleStats``,
+     ``CycleObservation``, ``StatsSnapshot``).
+   * ``histogram.rs`` — ``Histogram`` with the fixed bucket table
+     from :need:`ADR_0060`. Public API: ``record(value_ns)``,
+     ``percentile(q: f32) -> u64``. The record path is ``#[inline]``
+     and contains no allocation (verified by :need:`TEST_0194`).
+   * ``cycle.rs`` — ``CycleStats`` struct plus the
+     ``CycleObservation { task_id, period_ns, actual_period_ns,
+     jitter_ns, took_ns }`` value type carried by
+     ``on_cycle_stats``.
+
+   **In ``crates/sonic-executor/src/observer.rs``**
+
+   * Extend ``Observer`` with a default-method
+     ``fn on_cycle_stats(&self, _: &CycleObservation) {}`` — the
+     default no-op preserves backward compatibility for existing
+     ``Observer`` implementations.
+
+   **In ``crates/sonic-executor/src/executor.rs``**
+
+   * Add a ``Vec<CycleStats>`` field on ``Executor``, sized at
+     ``build`` time from the registered-task count. Pre-allocate per
+     :need:`REQ_0060`.
+   * In the ``dispatch_loop`` post-execute integration: record
+     ``took`` into ``CycleStats[task].hist``, compute
+     ``period_jitter`` against the task's declared scan period,
+     update ``max_jitter_ns`` via ``fetch_max``, increment
+     ``overrun_count`` if ``took > period``, then call
+     ``observer.on_cycle_stats(&obs)``.
+   * Add public ``Executor::stats_snapshot(&self) -> StatsSnapshot``
+     that walks ``self.cycle_stats`` and emits a snapshot.
+
+   **Verification**
+
+   * Histogram accuracy — :need:`TEST_0190`.
+   * Jitter readout — :need:`TEST_0191`.
+   * Overrun counter — :need:`TEST_0192`.
+   * Push/pull contract — :need:`TEST_0193`.
+   * Allocation-free update — :need:`TEST_0194`.
+
+----
+
+PREEMPT_RT validation harness
+-----------------------------
+
+Detailed design for the **PREEMPT_RT validation harness** sub-feature
+(:need:`FEAT_0022`). The harness is packaged as an out-of-tree cargo
+bin and consumes the :need:`FEAT_0021` telemetry push channel as its
+sole measurement path.
+
+.. arch-decision:: Harness as xtask, not CI gate
+   :id: ADR_0061
+   :status: open
+   :refines: REQ_0112
+
+   **Context.** :need:`REQ_0110` requires a documented worst-case
+   jitter envelope. The natural ASPICE / industrial pattern is to wire
+   a benchmark gate into CI so regressions block merge. Cloud
+   GitHub-hosted runners do not run PREEMPT_RT and cannot be made to
+   do so without self-hosting. A self-hosted PREEMPT_RT runner for a
+   single-maintainer personal project carries ongoing infra cost
+   (host availability, kernel updates, runner-agent updates).
+
+   **Decision.** Package the harness as an out-of-tree cargo bin
+   under ``xtask/preempt-rt/`` and document a manual reproduction
+   procedure (per :need:`REQ_0112`). Do not gate CI on jitter
+   measurements. The envelope artifact (:need:`REQ_0110`) is updated
+   manually after a measurement run.
+
+   **Alternatives considered.**
+
+   * *Self-hosted PREEMPT_RT runner with auto-gate.* Captures
+     regressions automatically but introduces a single-point-of-
+     failure infra dependency. Rejected for the current
+     single-maintainer setup; revisitable once the project has
+     persistent infrastructure.
+   * *Scheduled (nightly) run on self-hosted runner.* Same infra
+     dependency as the auto-gate, with slower regression detection.
+     Rejected for the same reason.
+   * *Run ``cyclictest`` only, no harness.* Loses the link between
+     measurements and the ``sonic-executor`` dispatch path. Rejected
+     because the relevant question is "what jitter does sonic add on
+     top of the kernel?", which ``cyclictest`` alone cannot answer.
+
+   **Consequences.**
+
+   ✅ Zero ongoing infra cost; runs are on-demand by the maintainer.
+   ✅ The harness path is identical to the production telemetry path
+   (per :need:`REQ_0113`), so the manual run is representative of
+   production behaviour.
+   ❌ Regressions can land between manual runs. Mitigated partly by
+   :need:`TEST_0194` (allocation-free telemetry update) and
+   :need:`TEST_0192` (overrun counter correctness) staying in regular
+   CI; what the harness uniquely validates is the *absolute envelope*,
+   not behavioural correctness.
+
+.. building-block:: xtask-preempt-rt harness
+   :id: BB_0052
+   :status: open
+   :implements: REQ_0111
+   :refines: ADR_0061
+
+   Workspace member ``xtask-preempt-rt`` — a cargo bin that
+   constructs a representative ``Executor``, runs it for a configurable
+   number of scan cycles, and writes ``CycleObservation`` records to
+   stdout as NDJSON.
+
+   CLI shape:
+
+   .. code-block:: text
+
+      cargo xtask preempt-rt-bench \
+          --load-profile {idle,cpu-stress,cyclictest-coexist} \
+          --cycle-count <N> \
+          --task-count <K> \
+          --scan-period-us <P>
+
+   The harness installs a custom ``Observer`` implementation whose
+   ``on_cycle_stats`` writes one NDJSON line per call. No timing
+   measurements are taken outside the ``Observer`` callback
+   (per :need:`REQ_0113`).
+
+.. impl:: xtask-preempt-rt — crate layout and procedure doc
+   :id: IMPL_0071
+   :status: open
+   :implements: BB_0052
+   :refines: REQ_0111
+
+   **New workspace member ``xtask/preempt-rt/``**
+
+   * ``Cargo.toml`` — depends on ``sonic-executor`` plus minimal
+     transitive crates. Not a default workspace build target.
+   * ``src/main.rs`` — argument parsing (``clap``), executor
+     construction, ``Observer`` wiring, run loop.
+   * ``src/workload.rs`` — load-profile fixtures
+     (``idle``, ``cpu-stress``, ``cyclictest-coexist``).
+     ``cpu-stress`` spawns ``stress-ng``; ``cyclictest-coexist`` prints
+     a copy-paste ``cyclictest`` command and waits for the operator.
+   * ``src/ndjson.rs`` — minimal NDJSON writer (no ``serde_json``
+     dependency to keep the harness's own jitter low).
+
+   **New document ``docs/preempt-rt-procedure.md``** (deferred to
+   the implementation phase — written when the first measurement run
+   is staged so the procedure can reflect the actual host).
+
+   Sections planned:
+
+   * Prerequisites — Debian / Ubuntu host with
+     ``linux-image-rt-amd64`` or equivalent, ``stress-ng``,
+     ``rt-tests``.
+   * Kernel configuration — ``CONFIG_PREEMPT_RT=y`` verification,
+     boot-line flags (``isolcpus=2,3``, ``nohz_full=2,3``,
+     ``rcu_nocbs=2,3``).
+   * Capability and pinning — ``CAP_SYS_NICE`` requirement for
+     ``SCHED_FIFO`` (per :need:`REQ_0041`).
+   * Reproducing the envelope — sample command line for each load
+     profile.
+   * Updating the envelope artifact — how to incorporate fresh
+     measurements into :need:`REQ_0110`'s versioned document.
+
+   **Verification**
+
+   * Build + smoke run — :need:`TEST_0240`.
+   * NDJSON schema — :need:`TEST_0241`.
+   * Push/pull agreement — :need:`TEST_0242`.
