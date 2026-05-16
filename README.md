@@ -8,9 +8,10 @@ Two layered pieces:
 - **`sonic-executor`** — items triggered by IPC, intervals, and request/response
   activity; sequential chains; parallel DAGs; signal/slot; lifecycle observability.
 - **`sonic-connector-*`** — typed channels with codec-pluggable payloads,
-  uniform connector health, and a reference EtherCAT connector that drives a
-  SubDevice's process data via the same plugin-facing `ChannelWriter` /
-  `ChannelReader` types every other connector will expose.
+  uniform connector health, and two reference connectors — EtherCAT (driving a
+  SubDevice's process data) and Zenoh (pub/sub + query/reply over a Zenoh
+  session) — both exposing the same plugin-facing `ChannelWriter` /
+  `ChannelReader` types every other connector will reuse.
 
 > [!WARNING]
 > **Personal experiment. Not meant for production.**
@@ -23,7 +24,7 @@ Two layered pieces:
 
 ## What's here
 
-Nine crates in the workspace, layered:
+Ten crates in the workspace, layered:
 
 | Crate | Purpose |
 |---|---|
@@ -35,6 +36,7 @@ Nine crates in the workspace, layered:
 | [`sonic-connector-codec`](crates/sonic-connector-codec) | `PayloadCodec` implementations. Ships `JsonCodec`; codec is compile-time-dispatched, so additional codecs are plug-in. `BB_0003`. |
 | [`sonic-connector-host`](crates/sonic-connector-host) | `Connector` trait + `ConnectorHost` / `ConnectorGateway` builders + `HealthSubscription`. The seam at which protocol-specific connectors plug into an `Executor`. `BB_0005`. |
 | [`sonic-connector-ethercat`](crates/sonic-connector-ethercat) | Reference EtherCAT connector built on the framework. Pluggable `BusDriver` (mock or `ethercrab`), bit-slice PDI routing, gateway-side dispatcher that hops bytes between iceoryx2 and the SubDevice PDI each cycle. `BB_0030` / `FEAT_0041`. |
+| [`sonic-connector-zenoh`](crates/sonic-connector-zenoh) | Reference Zenoh connector. Pluggable `ZenohSessionLike` back-end (mock or `zenoh::Session`), pub/sub + query/reply with timeout-correct sealed-queries handling, peer-count-driven health. `BB_0040` / `FEAT_0042`. |
 | [`sonic-replay`](crates/sonic-replay) | Empty placeholder for an eventual replay coordinator. Do not depend on it. |
 
 ## Executor quick start
@@ -197,6 +199,39 @@ plugin → gateway → SubDevice outputs PDI) or `"{descriptor.name()}.in"`
 on the same SubDevice are preserved across writes via bit-level
 read-modify-write.
 
+### Zenoh reference connector
+
+[`sonic-connector-zenoh`](crates/sonic-connector-zenoh) is the second
+concrete protocol. It exposes pub/sub on the standard `ChannelWriter` /
+`ChannelReader` handles and query/reply through the connector's
+`ZenohQuerier` / `ZenohQueryable` handles, all over a single Zenoh session:
+
+1. Plugin's `ChannelWriter::send` encodes the value via the connector's
+   codec and publishes it on an iceoryx2 service.
+2. Gateway-side dispatcher drains the publish, applies the channel's
+   `ZenohRouting` (key expression, congestion control, reliability,
+   priority), and forwards via the back-end session.
+3. Declared subscribers feed inbound bytes back through the connector to
+   `ChannelReader::try_recv`.
+4. Query traffic flows through `ZenohQuerier::query` and
+   `ZenohQueryable::reply`, with a `sealed_queries` sidecar that
+   coordinates the timeout/late-reply race so a reply arriving after the
+   query's deadline is dropped instead of leaking to the plugin.
+
+The session back-end is pluggable:
+
+- **`MockZenohSession`** — in-process programmable session. Exposes a
+  `peer_count` knob so health-watcher tests (`REQ_0442`) can drive
+  `Healthy` ↔ `Degraded` transitions deterministically and verify the
+  query lifecycle without a running router.
+- **`RealZenohSession`** (under the `zenoh-integration` feature) — wraps
+  `zenoh::Session` (zenoh 1.x), owns its own tokio runtime, and enables
+  `transport_tcp` so it can open `tcp/...` locators.
+
+`ZenohHealthMonitor` polls the back-end's peer count against a
+configurable `min_peers` threshold and emits `HealthEvent`s through the
+same `subscribe_health` surface every connector exposes.
+
 ## Threading
 
 Single executor-owned worker pool (M1 model). The thread that calls
@@ -218,6 +253,7 @@ the WaitSet thread.
 | `thread_attrs`   | `sonic-executor` | off     | Core-affinity, thread name prefix, and (Linux) `SCHED_FIFO` priority on the executor's worker pool. |
 | `json`           | `sonic-connector-codec` | **on** | `JsonCodec` via `serde_json`. |
 | `bus-integration`| `sonic-connector-ethercat` | off | Pull `ethercrab` and expose `EthercrabBusDriver`. Off by default so consumers that only want the framework types and pure-logic helpers don't pull ethercrab's transitive dependencies. |
+| `zenoh-integration`| `sonic-connector-zenoh` | off | Pull `zenoh` 1.x (with `transport_tcp` enabled) and expose `RealZenohSession`. Off by default so consumers that only want the framework types and `MockZenohSession` don't pull zenoh's transitive dependencies. |
 
 iceoryx2 itself handles SIGINT/SIGTERM natively — no `ctrlc` feature is
 needed and the loop exits cleanly on either signal.
@@ -300,6 +336,18 @@ This is **pre-1.0 personal experiment code.** Concretely:
 - The EtherCAT connector's real-bus path (`bus-integration` feature) is
   compile-checked only — hardware tests run under `ETHERCAT_TEST_NIC`
   and are not part of the default CI matrix.
+- The Zenoh connector's real-session path (`zenoh-integration` feature)
+  follows the same model: the test matrix exercises `MockZenohSession`
+  in CI; `RealZenohSession` is compile-checked and validated against a
+  running router out-of-band.
+- The safety concept under [`spec/safety/`](spec/safety) is **SEooC
+  sketch-level**. It captures an assumed item, an illustrative HARA,
+  two assumed safety goals, five AFSRs, ten TSRs allocated across the
+  workspace, a Freedom-From-Interference argument, and a nine-item
+  Assumption-of-Use contract. ASIL D is claimed via ISO 26262-9 §5
+  decomposition (sonic as `ASIL B(D)`, a diverse integrator-supplied
+  monitor as the second `ASIL B(D)`) — the independence argument is
+  **not closed by sonic** and the whole concept has not been assessed.
 - No version has been published to crates.io. There is no support, no
   release cadence, no SLA, and no backwards-compatibility guarantee.
 
