@@ -1084,12 +1084,12 @@ Zenoh reference connector
    :satisfies: FEAT_0045
    :links: BB_0040, TEST_0310
 
-   The ``sonic-connector-zenoh`` crate shall expose a default-off
-   ``zenoh-integration`` cargo feature. The real ``zenoh`` crate
-   shall be an optional dependency activated only by that feature
-   (mirrors :need:`BB_0030`'s ``bus-integration`` posture). Without
-   the feature, the connector framework types plus
-   ``MockZenohSession`` shall remain available.
+   The real ``zenoh`` crate shall be an optional dependency of
+   ``sonic-connector-zenoh``, activated only by a default-off
+   ``zenoh-integration`` cargo feature (mirrors :need:`BB_0030`'s
+   ``bus-integration`` posture). Availability of
+   ``MockZenohSession`` and the connector framework types in the
+   default build is covered separately by :need:`REQ_0445`.
 
 .. req:: MockZenohSession ships unfeature-gated
    :id: REQ_0445

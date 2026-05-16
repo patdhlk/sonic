@@ -735,19 +735,33 @@ land.
 
 .. test:: Health state machine on MockZenohSession lifecycle
    :id: TEST_0308
-   :status: open
+   :status: implemented
    :verifies: REQ_0440, REQ_0442
 
    Walk the mock session through ``Connecting → Up → Degraded →
    Up → Down`` and assert one ``HealthEvent`` per transition on
    the connector's health channel. Asserts each variant carries
    the documented payload (``since`` timestamp, ``reason``
-   string).
+   string). Realised across two test files: the
+   ``Connecting → Up → Down`` legs by
+   ``crates/sonic-connector-zenoh/tests/health_transitions.rs``,
+   and the ``Up → Degraded → Up`` legs (driven by ``min_peers``
+   threshold crossings) by
+   ``crates/sonic-connector-zenoh/tests/min_peers_degraded.rs``.
 
 .. test:: REQ_0441 anti-req — no ReconnectPolicy on session loss
    :id: TEST_0309
    :status: implemented
    :verifies: REQ_0441
+
+   Regression-guard for the explicit anti-requirement
+   :need:`REQ_0441` (which is status:rejected because the project
+   deliberately excludes ``ReconnectPolicy`` from the Zenoh
+   connector — see the "Anti-goals" preamble above the rejected
+   ``req`` cluster in ``spec/requirements/connector.rst``). The
+   ``:verifies:`` link asserts that the excluded behaviour
+   remains absent; ``rejected`` parent + ``implemented`` verifier
+   is the project's documented convention for anti-req checks.
 
    Static check that ``ZenohGateway`` exposes no
    ``ReconnectPolicy``-typed field and the
