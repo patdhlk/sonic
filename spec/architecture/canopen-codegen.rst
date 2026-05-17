@@ -274,6 +274,7 @@ Quality goals capture the qualities the architecture is optimised for.
 .. building-block:: sonic-connector-can adapter (follow-on)
    :id: BB_0088
    :status: open
+   :implements: FEAT_0060
    :links: FEAT_0046
 
    Out-of-scope for this round. A thin adapter that maps any
