@@ -22,7 +22,7 @@
 //!   sees bus-off / error-passive transitions via `CAN_ERR_FLAG`
 //!   frames (`REQ_0631`).
 //!
-//! * **Reopen via close + re-open.** [`Self::reopen`] drops the old
+//! * **Reopen via close + re-open.** `Self::reopen` drops the old
 //!   socket and constructs a fresh `CanFdSocket` for the same
 //!   interface; this is the cleanest way to recover from bus-off
 //!   when the kernel does not have `can-restart-ms` configured
@@ -47,7 +47,7 @@ pub struct RealCanInterface {
     iface: CanIface,
     state: CanIfaceState,
     /// `Some(socket)` while the interface is active. `None` after
-    /// [`Self::reopen`] has dropped the prior socket but before the
+    /// `Self::reopen` has dropped the prior socket but before the
     /// new one is constructed — never observed by external code
     /// because `reopen` either ends with `Some` (success) or returns
     /// `Err` (failure left for the caller to handle).
