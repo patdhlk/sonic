@@ -1,0 +1,18 @@
+# Project-specific typo allowlist.
+#
+# Override domain vocabulary that typos' default dictionary flags as
+# misspellings. Run `typos` locally (or via pre-commit) to surface new
+# candidates; resist adding random English words here — only domain
+# acronyms and deliberate stylistic choices belong.
+
+[default.extend-words]
+# EtherCAT vocabulary.
+SOEM    = "SOEM"     # Simple Open EtherCAT Master (C stack); not a typo of SOME.
+soem    = "soem"     # Lowercase form in identifiers / file paths.
+
+# Stylistic choices used throughout the codebase.
+clonable = "clonable"  # Project prefers `clonable` over `cloneable`.
+cachable = "cachable"  # Project prefers `cachable` over `cacheable`.
+
+# Prose vocabulary typos flags overzealously.
+mis      = "mis"       # Used as a prefix in hyphenated compounds like "mis-model".

@@ -1,0 +1,109 @@
+# Pre-commit hooks for sonic.
+#
+# Install:    pre-commit install && pre-commit install --hook-type pre-push
+# Run all:    pre-commit run --all-files
+# Run hook:   pre-commit run <hook-id> --all-files
+#
+# Fast checks run on `pre-commit` (every commit). Heavier checks (clippy,
+# rustdoc with -D warnings) run on `pre-push` only — same checks CI runs,
+# so a clean local push is a clean CI run.
+
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  # ---------------------------------------------------------------- hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.svg$
+      - id: end-of-file-fixer
+        exclude: \.svg$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+        # Rust source files start with inner attributes (`#![...]`), which
+        # the regex-based check misclassifies as shebangs.
+        exclude: \.rs$
+      - id: check-shebang-scripts-are-executable
+        exclude: \.rs$
+
+  # -------------------------------------------------------------------- typos
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.28.4
+    hooks:
+      - id: typos
+        # Don't auto-fix; report only. typos.toml in repo root can pin
+        # project-specific allowlists once we have hits to triage.
+        args: ["--no-check-filenames"]
+
+  # ---------------------------------------------------------- rust formatting
+  - repo: local
+    hooks:
+      - id: cargo-fmt-check
+        name: cargo fmt --check
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        description: Rejects unformatted Rust files. Matches the `fmt` job in CI.
+
+  # ----------------------------------------------------------------- spec
+  # Each of these only runs when files under spec/ change. They protect the
+  # GitHub Pages deploy and the `spec` CI job from preventable failures.
+  - repo: local
+    hooks:
+      - id: mermaid-validate
+        name: validate mermaid diagrams in spec/
+        # Pure-Node, ~5s, catches the failure mode that broke the last push
+        # (semicolons in sequence-diagram messages, double-escaped entities).
+        entry: bash -c 'cd spec && node scripts/validate-mermaid.mjs .'
+        language: system
+        pass_filenames: false
+        files: ^spec/.*\.rst$
+
+      - id: ubc-check
+        name: ubc check (RST linting via useblocks)
+        entry: bash -c 'cd spec && ubc check .'
+        language: system
+        pass_filenames: false
+        files: ^spec/.*\.rst$
+
+      - id: sphinx-build-strict
+        name: sphinx-build -W (warnings as errors)
+        # ~3-10s incremental. Matches CI's "Build spec (warnings as errors)".
+        entry: bash -c 'cd spec && uv run sphinx-build -W -b html . _build/html'
+        language: system
+        pass_filenames: false
+        files: ^spec/.*\.(rst|py|toml)$
+
+  # ---------------------------------------------------- pre-push: heavy checks
+  # These mirror the CI jobs that take 30s+. They run only on `git push` so
+  # tight-loop committing stays fast.
+  - repo: local
+    hooks:
+      - id: cargo-clippy
+        name: cargo clippy --all-features -D warnings
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        stages: [pre-push]
+        description: Matches the `clippy` CI job.
+
+      - id: cargo-doc
+        name: cargo doc --all-features (-D warnings)
+        entry: bash -c 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps'
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        stages: [pre-push]
+        description: Matches the `doc` CI job.

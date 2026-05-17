@@ -10,7 +10,7 @@ hardware allocation, and failure modes.
 
 Both ASG_0001 and ASG_0002 are decomposed as:
 
-    ``ASIL D = ASIL B(D) + ASIL B(D)``
+``ASIL D = ASIL B(D) + ASIL B(D)``
 
 The ``(D)`` annotation means each element is developed at ASIL B but
 under ASIL D process constraints (so the decomposition is reversible

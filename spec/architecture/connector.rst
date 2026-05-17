@@ -1422,11 +1422,11 @@ behaviour and the building blocks that implement it.
         participant R as ChannelReader
         participant U as user code
 
-        BUS->>SK: arbitration + ACK; data frame matches kernel filter
+        BUS->>SK: arbitration + ACK, data frame matches kernel filter
         SK->>RX: read_frame() → CanFrame | CanFdFrame | error frame
         alt error frame
             RX->>HC: classify (passive / warning / bus-off)
-            HC->>HC: update per-iface sub-state; aggregate via worst-of
+            HC->>HC: update per-iface sub-state and aggregate via worst-of
         else data frame
             RX->>FC: lookup matching readers by (can_id, mask, ext)
             loop for each matching reader
