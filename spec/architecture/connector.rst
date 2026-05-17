@@ -1026,6 +1026,107 @@ two crates that carry the most logic.
    offending sample or reply chunk. Same shape as :need:`BB_0034`
    (EtherCAT) and :need:`BB_0022` (MQTT).
 
+.. building-block:: sonic-connector-can crate
+   :id: BB_0070
+   :status: open
+   :implements: REQ_0600, REQ_0602, REQ_0603, REQ_0604, REQ_0605
+
+   CAN plugin (``CanConnector<C>`` implementing ``Connector``) and
+   gateway (``CanGateway`` exposing executable items). Hosts the
+   tokio sidecar driving N SocketCAN sockets and the bridges
+   between sonic-executor and tokio. Depends on
+   ``sonic-connector-core``, ``sonic-connector-transport-iox``,
+   ``sonic-connector-codec``, ``sonic-executor``, and (behind the
+   ``socketcan-integration`` feature) ``socketcan`` with its
+   ``tokio`` feature enabled. Ships ``MockCanInterface``
+   unfeature-gated for layer-1 tests on any host OS.
+
+.. building-block:: CanConnector (sub-block of BB_0070, plugin side)
+   :id: BB_0071
+   :status: open
+   :implements: REQ_0600, REQ_0601, REQ_0612, REQ_0615, REQ_0621
+
+   Plugin-side ``CanConnector<C: PayloadCodec>``. Implements
+   ``Connector`` with ``type Routing = CanRouting``. Owns no I/O —
+   produces ``ChannelWriter<T, C, N>`` / ``ChannelReader<T, C, N>``
+   handles whose ``CanRouting`` declares the target interface,
+   CAN ID, mask, frame kind, and FD flags. Validates that
+   ``CanRouting::iface`` belongs to the configured gateway's
+   interface set and that ``ChannelDescriptor::max_payload_size``
+   matches ``CanRouting::kind`` (8 for Classical, 64 for FD)
+   before any iceoryx2 service is created. Acts as a
+   compile-time-checked façade over the gateway's SHM services.
+
+.. building-block:: CanGateway (sub-block of BB_0070, gateway side)
+   :id: BB_0072
+   :status: open
+   :implements: REQ_0613, REQ_0614, REQ_0620, REQ_0624, REQ_0625, REQ_0630, REQ_0631
+
+   Gateway-side executable item that owns one ``CanInterfaceLike``
+   per configured interface (real ``socketcan::CanSocket`` /
+   ``CanFdSocket`` when ``socketcan-integration`` is on,
+   ``MockCanInterface`` otherwise — both implement
+   ``CanInterfaceLike``). For each interface, runs an RX task
+   draining the socket and a TX drain consuming the outbound
+   bridge. Maintains a per-interface routing registry mapping
+   each open ``ChannelDescriptor`` to its ``CanRouting`` and
+   direction. Aggregates per-interface sub-states into the
+   externally-visible ``ConnectorHealth`` via worst-of
+   (:need:`REQ_0630`), enables ``CAN_ERR_FLAG`` on every owned
+   socket, classifies error frames internally (:need:`REQ_0631`),
+   and never forwards error frames to plugin channels
+   (:need:`REQ_0636`, :need:`REQ_0643`).
+
+.. building-block:: Tokio bridge for CAN (sub-block of BB_0072)
+   :id: BB_0073
+   :status: open
+   :implements: REQ_0605, REQ_0606, REQ_0607, REQ_0608
+
+   Two bounded channel pairs per owned interface that translate
+   between sonic-executor's WaitSet thread and the tokio runtime
+   owning the SocketCAN sockets. Outbound saturation surfaces as
+   ``ConnectorError::BackPressure`` plus
+   ``ConnectorHealth::Degraded``; inbound saturation emits
+   ``HealthEvent::DroppedInbound { count }`` and drops the
+   offending CAN frame. Same shape as :need:`BB_0044` (Zenoh),
+   :need:`BB_0034` (EtherCAT), and :need:`BB_0022` (MQTT).
+
+.. building-block:: Per-iface filter compiler (sub-block of BB_0072)
+   :id: BB_0074
+   :status: open
+   :implements: REQ_0622, REQ_0623, REQ_0624
+
+   Pure-logic helper that maps the per-interface registry of
+   inbound ``CanRouting`` entries to a single
+   ``Vec<libc::can_filter>`` (or the ``socketcan`` crate's
+   equivalent newtype) and applies it via
+   ``setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, …)``. Recomputed
+   whenever a reader is created or dropped on the affected
+   interface; the recompute does not require the socket to be
+   re-opened or the bus to leave its current state. Symmetric
+   counterpart for the inbound demux side: given a received
+   frame, returns the list of registered readers whose
+   ``(can_id, mask, extended)`` matches under kernel
+   ``CAN_RAW_FILTER`` semantics so that every matching reader
+   gets its own envelope copy (:need:`REQ_0624`).
+
+.. building-block:: MockCanInterface (sub-block of BB_0070)
+   :id: BB_0075
+   :status: open
+   :implements: REQ_0604
+
+   In-process loopback implementation of ``CanInterfaceLike``,
+   shipping in the default build (not gated by
+   ``socketcan-integration``). Sends queued for transmission on a
+   mock interface are immediately delivered to any reader whose
+   filter matches; programmable error-frame injection drives the
+   :need:`BB_0072` gateway's health classifier under test.
+   Exists so the Layer-1 test pyramid can exercise the full
+   envelope ↔ interface ↔ envelope hop on Linux, macOS, and
+   Windows without depending on the real ``socketcan`` crate or
+   a Linux kernel CAN module. Mirrors :need:`BB_0040`'s
+   ``MockZenohSession`` posture under :need:`REQ_0445`.
+
 ----
 
 6. Runtime view
@@ -1252,6 +1353,125 @@ behaviour and the building blocks that implement it.
         end
         GW->>EC: propagate reference clock
         EC->>SD: FRMW 0x0910 (first SubDevice clock)
+
+.. architecture:: CAN frame send path (app → bus)
+   :id: ARCH_0060
+   :status: open
+   :refines: REQ_0613, REQ_0621, BB_0072, BB_0073
+
+   The CAN send path is the framework's zero-copy publish path
+   (:need:`ARCH_0010`) terminated by a SocketCAN write. The codec
+   writes envelope payload bytes directly into shared memory via
+   ``Publisher::loan``; the gateway pulls them off the outbound
+   bridge and constructs a ``CanFrame`` / ``CanFdFrame`` per
+   :need:`REQ_0613`. No re-encoding occurs on the gateway side.
+
+   .. mermaid::
+
+      sequenceDiagram
+        autonumber
+        participant U as user code
+        participant W as ChannelWriter
+        participant P as Publisher (sonic-executor)
+        participant SHM as iceoryx2 SHM
+        participant S as Subscriber (gateway)
+        participant GI as OutboundGatewayItem
+        participant BR as Tokio bridge (per-iface outbound)
+        participant SK as socketcan socket (iface)
+        participant BUS as CAN bus
+
+        U->>W: writer.send(&value)
+        W->>P: publisher.loan(|slot| codec.encode(value, slot.payload))
+        P->>SHM: zero-copy publish + notify
+        SHM-->>S: WaitSet wakes
+        S->>GI: ExecutableItem::execute()
+        GI->>BR: bridge_tx.try_send(payload, routing)
+        BR-->>SK: tokio task drains bridge
+        SK->>SK: build CanFrame{id, ext, data} or CanFdFrame{id, brs, esi, data}
+        SK->>BUS: write_frame()
+
+.. architecture:: CAN receive path with multi-iface demux
+   :id: ARCH_0061
+   :status: open
+   :refines: REQ_0614, REQ_0620, REQ_0622, REQ_0624, BB_0072, BB_0074
+
+   The CAN receive path applies the per-interface kernel filter
+   (compiled by :need:`BB_0074` from the union of registered
+   readers' ``(can_id, mask, extended)``) before user space sees
+   the frame. The gateway then demultiplexes each received frame
+   to every channel whose filter matches, re-publishing the data
+   bytes onto each matching reader's inbound iceoryx2 service.
+   Error frames are siphoned off the same read into the health
+   classifier and never reach a plugin channel (:need:`REQ_0631`,
+   :need:`REQ_0636`).
+
+   .. mermaid::
+
+      sequenceDiagram
+        autonumber
+        participant BUS as CAN bus
+        participant SK as socketcan socket (iface)
+        participant RX as RX task (tokio)
+        participant FC as filter / demux (BB_0074)
+        participant HC as error classifier (BB_0072)
+        participant BR as Tokio bridge (per-iface inbound)
+        participant GI as InboundGatewayItem
+        participant P as Publisher (gateway, in svc)
+        participant SHM as iceoryx2 SHM
+        participant S as Subscriber (app)
+        participant R as ChannelReader
+        participant U as user code
+
+        BUS->>SK: arbitration + ACK; data frame matches kernel filter
+        SK->>RX: read_frame() → CanFrame | CanFdFrame | error frame
+        alt error frame
+            RX->>HC: classify (passive / warning / bus-off)
+            HC->>HC: update per-iface sub-state; aggregate via worst-of
+        else data frame
+            RX->>FC: lookup matching readers by (can_id, mask, ext)
+            loop for each matching reader
+                FC->>BR: enqueue (descriptor, data)
+            end
+            BR->>GI: sonic-executor Channel wakes item
+            GI->>P: publisher.loan(|slot| copy payload bytes, set header)
+            P->>SHM: zero-copy publish + notify
+            SHM-->>S: WaitSet wakes
+            S->>R: reader.try_recv() → Received{ value, header }
+            R->>U: user code consumes value
+        end
+
+.. architecture:: CAN bus health and bus-off recovery
+   :id: ARCH_0062
+   :status: open
+   :refines: REQ_0630, REQ_0632, REQ_0633, REQ_0634, REQ_0635, BB_0072
+
+   Per-interface sub-state machine driven by error-frame
+   classification; aggregated into the connector's single visible
+   ``ConnectorHealth`` via worst-of (:need:`REQ_0630`). Bus-off
+   closes the offending socket and arms
+   ``ReconnectPolicy::next_delay()``; the reopen sequence
+   re-applies the per-interface filter (:need:`BB_0074`) before
+   the sub-state can transition back through ``Connecting``.
+
+   .. mermaid::
+
+      stateDiagram-v2
+        [*] --> Connecting: iface socket bound, filter applied
+        Connecting --> Up: first successful read or successful send
+        Up --> Degraded: error-passive / error-warning frame received
+        Degraded --> Up: no further error frames for recovery window
+        Up --> Down: bus-off error frame received
+        Degraded --> Down: bus-off escalation
+        Down --> Connecting: ReconnectPolicy backoff elapses, socket reopened, filter re-applied
+        Connecting --> Down: socket reopen / filter apply fails
+        Up --> [*]: shutdown
+        Down --> [*]: shutdown
+
+   Aggregation rule (:need:`REQ_0630`): any iface ``Down`` while
+   another remains ``Up`` surfaces as connector-level ``Degraded``;
+   all ifaces ``Down`` surfaces as connector-level ``Down``. Every
+   transition emits one ``HealthEvent`` (:need:`REQ_0635`) with
+   the offending interface name in the payload.
 
 ----
 
@@ -2122,6 +2342,150 @@ spec text that needed amendment during implementation.
    ``TEST_0313`` (client-mode router smoke) remain
    ``:status: draft`` until the ``zenoh-integration`` and
    ``ZENOH_TEST_ROUTER`` CI jobs land.
+
+.. impl:: sonic-connector-can crate (planned)
+   :id: IMPL_0080
+   :status: draft
+   :implements: BB_0070
+   :refines: REQ_0600, REQ_0601, REQ_0602, REQ_0603, REQ_0604, REQ_0605, REQ_0606, REQ_0607, REQ_0608, REQ_0610, REQ_0611, REQ_0612, REQ_0613, REQ_0614, REQ_0615, REQ_0620, REQ_0621, REQ_0622, REQ_0623, REQ_0624, REQ_0625, REQ_0630, REQ_0631, REQ_0632, REQ_0633, REQ_0634, REQ_0635, REQ_0636
+
+   **Crate.** ``crates/sonic-connector-can`` (planned; not yet
+   scaffolded). Default deps: ``sonic-connector-core``,
+   ``sonic-connector-transport-iox``, ``sonic-connector-host``,
+   ``sonic-executor``, ``crossbeam-channel``, ``tokio`` (``rt`` +
+   ``rt-multi-thread`` + ``macros`` + ``sync``). Optional
+   ``socketcan`` dep (with its ``tokio`` feature) behind the
+   default-off ``socketcan-integration`` cargo feature
+   (:need:`REQ_0603`).
+
+   **Status.** Planned surface only — the crate has not been
+   scaffolded. This directive locks in the public API that the
+   forthcoming implementation will be measured against. Once the
+   crate exists, its surface, dependencies, and test coverage are
+   reconciled against this directive; divergences are recorded as
+   amendments. Status flips from ``draft`` to ``open`` after the
+   first complete in-tree implementation lands and the public
+   surface matches the bulleted list below.
+
+   **Surface.**
+
+   * ``CanIface`` — bounded ASCII string newtype of
+     ``IFNAMSIZ`` − 1 = 15 bytes, validated on construction;
+     wraps the Linux network interface name (``can0``, ``vcan0``,
+     etc.). Implements ``Copy``, ``Eq``, ``Hash``.
+   * ``CanId { value: u32, extended: bool }`` — typed identifier
+     newtype carrying both 11-bit (standard) and 29-bit
+     (extended) CAN identifiers; the ``extended`` flag is
+     preserved end-to-end (:need:`REQ_0615`). Constructors
+     ``CanId::standard(u16)`` / ``CanId::extended(u32)`` enforce
+     the per-form bit-width invariant.
+   * ``CanFrameKind`` — enum ``{ Classical, Fd }``. Determines
+     ``ChannelDescriptor::max_payload_size`` deterministically
+     (8 / 64 bytes per :need:`REQ_0612`).
+   * ``CanFdFlags`` — bitflags ``{ BRS, ESI }`` carried in
+     ``CanRouting`` for FD channels; ignored when
+     ``kind == Classical``.
+   * ``CanRouting`` — typed routing carrying ``iface``, ``can_id``,
+     ``mask: u32``, ``kind``, ``fd_flags``. Implements ``Routing``
+     (:need:`REQ_0601`). Plugin-side validation runs inside
+     ``create_writer`` / ``create_reader`` before any iceoryx2
+     service is created — invalid iface or payload-kind mismatch
+     yields ``ConnectorError::Configuration``.
+   * ``CanConnectorOptions`` typed builder — ``ifaces: Vec<CanIface>``
+     listing the gateway-owned interfaces (:need:`REQ_0620`),
+     ``outbound_bridge_capacity`` / ``inbound_bridge_capacity``
+     (:need:`REQ_0606`), ``reconnect_policy: Box<dyn ReconnectPolicy>``
+     with ``ExponentialBackoff::default()`` (:need:`REQ_0634`),
+     and a ``recovery_window: Duration`` controlling the
+     error-passive → Up debounce on :need:`ARCH_0062`.
+   * ``OutboundBridge<T>`` — bounded per-iface; saturation
+     surfaces as ``ConnectorError::BackPressure`` and flips
+     health to ``Degraded`` (:need:`REQ_0607`).
+   * ``InboundBridge<T>`` — bounded per-iface; saturation drops
+     the offending CAN frame and bumps a running count so the
+     gateway emits ``HealthEvent::DroppedInbound { count }``
+     (:need:`REQ_0608`).
+   * ``CanInterfaceLike`` — trait abstracting over real
+     SocketCAN sockets vs ``MockCanInterface`` so the gateway is
+     compile-time monomorphised against either back-end.
+     Methods: ``send_classical`` / ``send_fd`` / ``recv`` /
+     ``apply_filter`` / ``state``. ``recv`` returns an enum
+     mirroring the upstream ``socketcan::CanFrame`` discriminant
+     (``Data | Remote | Error``) so error frames are surfaced on
+     the same call as data frames and routed to the gateway's
+     classifier without a separate code path.
+   * ``MockCanInterface`` — in-process loopback implementing
+     ``CanInterfaceLike``; ships in the default build, not gated
+     by ``socketcan-integration`` (:need:`REQ_0604`). Programmable
+     error-frame injection for testing
+     ``Connecting → Up → Degraded → Down → Connecting`` walks
+     against :need:`ARCH_0062`.
+   * ``RealCanInterface`` — thin wrapper over the upstream
+     ``socketcan`` crate's async sockets
+     (``socketcan::tokio::CanSocket`` for classical,
+     ``socketcan::tokio::CanFdSocket`` for FD); lives behind the
+     ``socketcan-integration`` cargo feature, which also enables
+     the upstream crate's ``tokio`` feature. Owns the
+     ``CAP_NET_RAW`` socket bind and the ``CAN_RAW_ERR_FILTER``
+     ``setsockopt`` for error-frame reporting (:need:`REQ_0631`).
+     The Linux raw-socket smoke test (:need:`TEST_0512`) follows
+     the upstream crate's ``vcan_tests`` posture: gate the CI job
+     on the ``vcan`` kernel module being loaded
+     (``./scripts/vcan.sh``) so the test only runs where ``vcan0``
+     actually exists.
+   * ``PerIfaceFilter`` (pure-logic helper, :need:`BB_0074`) —
+     compiles the union of ``(can_id, mask, extended)`` tuples
+     from registered readers into a single
+     ``Vec<libc::can_filter>`` (or the ``socketcan`` crate's
+     equivalent) suitable for one ``setsockopt(SOL_CAN_RAW,
+     CAN_RAW_FILTER, …)`` call. Symmetric counterpart for the
+     demux side: ``matching_readers(&frame) → impl Iterator<Reader>``
+     so every matching reader gets its own envelope copy
+     (:need:`REQ_0624`).
+   * ``CanGateway<I: CanInterfaceLike, C: PayloadCodec>`` —
+     owns one ``I`` per configured iface, per-iface routing
+     registries, the bounded bridges, the tokio runtime hosting
+     RX/TX tasks (:need:`REQ_0605`), and the per-iface
+     ``HealthSubState`` map aggregated via worst-of
+     (:need:`REQ_0630`). Observes error frames and updates
+     ``ConnectorHealth`` via :need:`ARCH_0062`; emits one
+     ``HealthEvent`` per transition (:need:`REQ_0635`).
+     ``ReconnectPolicy`` is owned at this layer
+     (:need:`REQ_0634`).
+   * ``CanConnector<C: PayloadCodec>`` — implements the framework
+     ``Connector`` trait with ``type Routing = CanRouting`` and
+     ``type Codec = C`` (:need:`REQ_0600`). ``create_writer`` /
+     ``create_reader`` open the plugin-side iceoryx2 services
+     named ``"{descriptor.name()}.out"`` / ``".in"`` and, on the
+     gateway side, trigger a per-iface filter recompute
+     (:need:`REQ_0623`).
+   * Linux-only real I/O — the gateway requires Linux ``PF_CAN``
+     and the ``CAP_NET_RAW`` capability (:need:`REQ_0602`,
+     mirrors :need:`REQ_0325`). The plugin-side ``CanConnector``
+     and ``MockCanInterface`` stay portable to macOS and Windows
+     for layer-1 development; the ``socketcan-integration``
+     feature is the Linux gate.
+   * Gateway-side dispatching forwards raw bytes only — codecs
+     run plugin-side on both send and receive paths
+     (:need:`REQ_0614`, mirrors :need:`REQ_0408` /
+     :need:`REQ_0327`).
+
+   **Tests.** The corpus authored alongside this directive in
+   :doc:`../verification/connector` includes TEST_0500
+   (``CanConnector`` trait surface), TEST_0501 (``CanRouting``
+   field round-trip), TEST_0502 / TEST_0503 (classical and FD
+   round-trip via ``MockCanInterface``), TEST_0504 (per-iface
+   filter union), TEST_0505 (multi-iface inbound demux),
+   TEST_0506 (bus-off → Down → ReconnectPolicy reopen),
+   TEST_0507 (error-passive → Degraded → recovery), TEST_0508
+   (tokio sidecar containment), TEST_0509 / TEST_0510 (bridge
+   saturation), TEST_0511 (cargo-feature dep gating), TEST_0513
+   (anti-req — error frames not on plugin channel), TEST_0514
+   (per-iface registry alloc-free iteration). Layer-2
+   ``TEST_0512`` (Linux raw-socket smoke against ``vcan0``)
+   remains ``:status: draft`` until the
+   ``socketcan-integration`` CI job and the kernel ``vcan``
+   module are wired into CI.
 
 ----
 

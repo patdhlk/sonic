@@ -1115,6 +1115,403 @@ Zenoh reference connector
    :need:`REQ_0325`'s Linux-only EtherCAT posture, because Zenoh has
    no OS-specific socket requirement comparable to ``CAP_NET_RAW``).
 
+CAN (SocketCAN) reference connector
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. feat:: CAN (SocketCAN) reference connector
+   :id: FEAT_0046
+   :status: open
+   :satisfies: FEAT_0030
+
+   A fourth concrete connector instantiating the framework's
+   contracts: ``socketcan``-backed CAN plugin and gateway exchanging
+   classical CAN and CAN-FD frames on one or more Linux SocketCAN
+   network interfaces, with internal error-frame-driven health,
+   ``ReconnectPolicy``-driven bus-off recovery, and a non-Linux
+   ``MockCanInterface`` for layer-1 tests. The gateway owns N
+   ``socketcan::CanSocket`` / ``CanFdSocket`` instances — one per
+   registered interface — and runs the RX/TX loops on a tokio
+   sidecar contained inside ``sonic-connector-can``. Linux is the
+   only supported host OS for real I/O; the in-process mock
+   interface is portable.
+
+.. feat:: CAN frame transport (classical + FD)
+   :id: FEAT_0047
+   :status: open
+   :satisfies: FEAT_0046
+
+   The on-wire form of CAN traffic crossing the plugin↔gateway
+   boundary. ``CanRouting`` declares per-channel CAN ID, mask, and
+   frame kind (Classical or FD); the iceoryx2 service payload
+   carries the raw CAN data bytes (codec-encoded plugin-side per
+   :need:`REQ_0211`), with the gateway acting as a byte-only mover
+   (symmetric with :need:`REQ_0327` and :need:`REQ_0408`).
+
+.. feat:: Multi-interface gateway and per-channel filtering
+   :id: FEAT_0048
+   :status: open
+   :satisfies: FEAT_0046
+
+   The gateway-side multiplexer: one gateway instance can own
+   multiple Linux CAN interfaces (broader than :need:`REQ_0312`'s
+   single-MainDevice EtherCAT posture). Per-channel CAN ID and mask
+   are compiled into one ``CAN_RAW_FILTER`` ``setsockopt`` per
+   interface, recomputed when channels are added or removed.
+
+.. feat:: Bus health, error frames, and reconnect
+   :id: FEAT_0049
+   :status: open
+   :satisfies: FEAT_0046
+
+   The CAN-specific health surface: per-interface state aggregated
+   into the connector's single externally-visible
+   ``ConnectorHealth``, error-frame consumption driving transitions
+   internally, and ``ReconnectPolicy``-driven socket reopen on
+   bus-off. Health-event semantics inherit from :need:`FEAT_0034`.
+
+.. req:: CanConnector implements Connector
+   :id: REQ_0600
+   :status: open
+   :satisfies: FEAT_0046
+
+   The connector crate shall expose ``CanConnector<C: PayloadCodec>``
+   that implements the ``Connector`` trait with
+   ``type Routing = CanRouting`` and ``type Codec = C``.
+
+.. req:: CanRouting carries iface, can_id, mask, kind, fd_flags
+   :id: REQ_0601
+   :status: open
+   :satisfies: FEAT_0046
+
+   The ``CanRouting`` struct shall identify one channel by Linux
+   network interface name (``iface``, bounded ASCII string of
+   ``IFNAMSIZ`` − 1 = 15 bytes), CAN identifier (``can_id``, with
+   an explicit ``extended: bool`` flag distinguishing 11-bit from
+   29-bit IDs), kernel-style ID mask (``mask: u32``), frame kind
+   (``CanFrameKind::{Classical, Fd}``), and FD bit-rate-switch /
+   error-state-indicator flags (``fd_flags: CanFdFlags``, ignored
+   when ``kind == Classical``). It shall implement the ``Routing``
+   marker trait.
+
+.. req:: Linux is the supported host OS for real I/O
+   :id: REQ_0602
+   :status: open
+   :satisfies: FEAT_0046
+
+   The CAN gateway shall open SocketCAN interfaces via the Linux
+   ``PF_CAN`` socket family, requiring the ``CAP_NET_RAW``
+   capability on the gateway process (mirrors :need:`REQ_0325`).
+   The plugin-side ``CanConnector`` and the ``MockCanInterface``
+   shall remain portable to macOS and Windows for layer-1
+   development.
+
+.. req:: socketcan-integration cargo feature gates the real socketcan dep
+   :id: REQ_0603
+   :status: open
+   :satisfies: FEAT_0046
+
+   The ``socketcan`` crate shall be an optional dependency of
+   ``sonic-connector-can``, activated only by a default-off
+   ``socketcan-integration`` cargo feature (mirrors
+   :need:`REQ_0444`'s ``zenoh-integration`` posture and
+   :need:`BB_0030`'s ``bus-integration`` posture).
+
+.. req:: MockCanInterface ships unfeature-gated
+   :id: REQ_0604
+   :status: open
+   :satisfies: FEAT_0046
+
+   ``MockCanInterface`` — an in-process loopback implementation of
+   the ``CanInterfaceLike`` trait — shall ship in the default
+   build, not gated by ``socketcan-integration``. It exists so
+   that the Layer-1 (pure-logic) test pyramid can exercise the
+   full envelope ↔ interface ↔ envelope hop without depending on
+   the real ``socketcan`` crate or a Linux kernel CAN module
+   (mirrors :need:`REQ_0445`).
+
+.. req:: Tokio sidecar contained inside the CAN connector crate
+   :id: REQ_0605
+   :status: open
+   :satisfies: FEAT_0046
+
+   The CAN gateway shall host its RX/TX tasks on a tokio runtime
+   contained inside ``sonic-connector-can``. Tokio shall not leak
+   into sonic-executor's WaitSet thread (mirrors :need:`REQ_0321`,
+   :need:`REQ_0258`, :need:`REQ_0403`).
+
+.. req:: CAN bridge channels are bounded
+   :id: REQ_0606
+   :status: open
+   :satisfies: FEAT_0046
+
+   The outbound (sonic-executor → tokio) and inbound (tokio →
+   sonic-executor) bridges between the plugin and the CAN gateway
+   sidecar shall be bounded channels with capacities configurable
+   via ``CanConnectorOptions`` (``outbound_bridge_capacity`` and
+   ``inbound_bridge_capacity``).
+
+.. req:: Outbound bridge saturation surfaces as BackPressure
+   :id: REQ_0607
+   :status: open
+   :satisfies: FEAT_0046
+
+   When the outbound bridge channel is full, ``ChannelWriter::send``
+   shall return ``ConnectorError::BackPressure`` and the gateway
+   shall report ``ConnectorHealth::Degraded``.
+
+.. req:: Inbound bridge saturation surfaces as DroppedInbound
+   :id: REQ_0608
+   :status: open
+   :satisfies: FEAT_0046
+
+   When the inbound bridge channel is full, the gateway shall emit
+   ``HealthEvent::DroppedInbound { count }`` and drop the offending
+   inbound CAN frame for that callback.
+
+.. req:: Classical CAN frames supported
+   :id: REQ_0610
+   :status: open
+   :satisfies: FEAT_0047
+
+   For channels declared with ``CanFrameKind::Classical``, the
+   connector shall transport up to 8 bytes of payload per frame,
+   with 11-bit standard or 29-bit extended identifiers (per
+   :need:`REQ_0601`'s ``extended`` flag). The corresponding
+   iceoryx2 service payload capacity shall be 8 bytes plus the
+   ``ConnectorEnvelope`` header.
+
+.. req:: CAN-FD frames supported
+   :id: REQ_0611
+   :status: open
+   :satisfies: FEAT_0047
+
+   For channels declared with ``CanFrameKind::Fd``, the connector
+   shall transport up to 64 bytes of payload per frame with the
+   FD-specific bit-rate-switch (BRS) and error-state-indicator
+   (ESI) flags carried in ``CanFdFlags``. The corresponding
+   iceoryx2 service payload capacity shall be 64 bytes plus the
+   ``ConnectorEnvelope`` header.
+
+.. req:: Channel payload sizing keyed on frame kind
+   :id: REQ_0612
+   :status: open
+   :satisfies: FEAT_0047
+
+   ``ChannelDescriptor<CanRouting>::max_payload_size`` shall be
+   derived deterministically from ``CanRouting::kind``: 8 bytes
+   for ``Classical``, 64 bytes for ``Fd``. The framework shall
+   reject any plugin-provided override that violates this mapping
+   with ``ConnectorError::Configuration``.
+
+.. req:: Outbound payload serialised to socketcan frame
+   :id: REQ_0613
+   :status: open
+   :satisfies: FEAT_0047
+
+   When a plugin publishes a value through ``ChannelWriter::send``,
+   the gateway shall, before the next RX/TX iteration on the
+   target interface, construct a ``socketcan::CanFrame`` (for
+   ``Classical``) or ``socketcan::CanFdFrame`` (for ``Fd``) whose
+   identifier is the channel's ``CanRouting::can_id`` (with the
+   ``extended`` flag honoured), whose data bytes are the
+   codec-encoded envelope payload, whose DLC is the payload
+   length, and — for FD — whose BRS / ESI flags are copied from
+   ``CanRouting::fd_flags``. The gateway shall not re-encode the
+   payload.
+
+.. req:: Inbound gateway is byte-only on the publish path
+   :id: REQ_0614
+   :status: open
+   :satisfies: FEAT_0047
+
+   On the inbound leg (CAN bus → plugin), the gateway shall
+   publish the raw frame data bytes received from the SocketCAN
+   read onto the matching channel's inbound iceoryx2 service as a
+   ``ConnectorEnvelope`` without invoking the channel's codec —
+   codec decoding is the responsibility of the plugin-side
+   ``ChannelReader::try_recv`` (symmetric with :need:`REQ_0327`
+   and :need:`REQ_0408`).
+
+.. req:: CAN ID extended flag preserved end-to-end
+   :id: REQ_0615
+   :status: open
+   :satisfies: FEAT_0047
+
+   The ``CanRouting::can_id.extended`` boolean shall be preserved
+   end-to-end between plugin and gateway: outbound, the gateway
+   shall set the ``CAN_EFF_FLAG`` bit on the kernel-side frame iff
+   ``extended`` is true; inbound, the gateway shall match against
+   ``can_id`` and ``mask`` honouring the same flag distinction so
+   that 11-bit and 29-bit IDs occupying the same numeric value are
+   delivered to separate readers.
+
+.. req:: Multiple interfaces per gateway
+   :id: REQ_0620
+   :status: open
+   :satisfies: FEAT_0048
+
+   A single ``CanGateway`` instance shall be capable of owning
+   multiple Linux SocketCAN interfaces (e.g. ``can0``, ``can1``,
+   ``vcan0``) simultaneously. The set of interfaces shall be
+   declared at gateway construction via
+   ``CanConnectorOptions::ifaces``. This requirement is broader
+   than :need:`REQ_0312`'s single-MainDevice EtherCAT posture
+   because SocketCAN bus saturation per interface is far lower
+   than EtherCAT process-image throughput and multi-bus
+   deployments are common in CAN.
+
+.. req:: Routing identifies the interface
+   :id: REQ_0621
+   :status: open
+   :satisfies: FEAT_0048
+
+   ``CanRouting::iface`` shall identify which gateway-owned
+   SocketCAN interface a channel binds to. The gateway shall
+   reject ``Connector::create_writer`` / ``create_reader`` calls
+   referencing an interface not listed in
+   ``CanConnectorOptions::ifaces`` with
+   ``ConnectorError::Configuration``.
+
+.. req:: Per-interface filter is the union of channel masks
+   :id: REQ_0622
+   :status: open
+   :satisfies: FEAT_0048
+
+   For each owned interface, the gateway shall compute the union
+   of ``(can_id, mask, extended)`` tuples drawn from every
+   currently-open inbound channel bound to that interface, and
+   apply the result as a single ``setsockopt(SOL_CAN_RAW,
+   CAN_RAW_FILTER, …)`` call. Frames not matching any registered
+   filter shall be discarded by the kernel before reaching the
+   gateway's read loop.
+
+.. req:: Filter recomputed on channel add/remove
+   :id: REQ_0623
+   :status: open
+   :satisfies: FEAT_0048
+
+   The per-interface filter (per :need:`REQ_0622`) shall be
+   recomputed and re-applied whenever a ``ChannelReader`` is
+   created or dropped. The recompute shall not require the
+   interface to be re-opened or the bus to leave its current
+   state.
+
+.. req:: Inbound demux to all matching readers
+   :id: REQ_0624
+   :status: open
+   :satisfies: FEAT_0048
+
+   When a CAN frame arrives on an interface, the gateway shall
+   publish the frame's data bytes (per :need:`REQ_0614`) onto the
+   inbound iceoryx2 service of every registered channel whose
+   ``(iface, can_id, mask, extended)`` matches the received
+   frame's identifier under kernel ``CAN_RAW_FILTER`` semantics.
+   Overlapping channel filters shall each receive their own
+   envelope copy.
+
+.. req:: Per-iface routing registry has stable iteration order
+   :id: REQ_0625
+   :status: open
+   :satisfies: FEAT_0048
+
+   The gateway shall maintain a per-interface routing registry
+   mapping each open ``ChannelDescriptor`` to its ``CanRouting``
+   and direction (outbound writer / inbound reader). The RX/TX
+   loops shall iterate this registry on every frame and every
+   send drain without per-iteration heap allocation (no ``Vec``
+   resize, no ``HashMap`` re-hash) — required by :need:`REQ_0060`
+   from the steady-state posture, mirroring :need:`REQ_0328`.
+
+.. req:: ConnectorHealth aggregates per-iface state via worst-of
+   :id: REQ_0630
+   :status: open
+   :satisfies: FEAT_0049
+
+   The single externally-visible ``ConnectorHealth`` reported by
+   ``CanConnector`` shall be the worst (least-healthy) of the
+   per-interface sub-states held by the gateway: any interface
+   ``Down`` shall surface as ``Degraded`` while at least one
+   other interface remains ``Up``, and shall surface as ``Down``
+   only when every owned interface is ``Down``. Per-interface
+   reasons shall be carried in the ``HealthEvent`` payload (e.g.
+   ``DegradedReason::IfaceDown { iface: "can1" }``).
+
+.. req:: Error frames consumed internally
+   :id: REQ_0631
+   :status: open
+   :satisfies: FEAT_0049
+
+   The gateway shall enable the ``CAN_ERR_FLAG`` error-frame
+   reporting mode on each owned interface via
+   ``setsockopt(SOL_CAN_RAW, CAN_RAW_ERR_FILTER, CAN_ERR_MASK)``,
+   consume error frames inside its RX loop, and use them only to
+   drive ``ConnectorHealth`` transitions. Error frames shall not
+   reach any plugin-visible channel (re-affirmed by
+   :need:`REQ_0643`).
+
+.. req:: error-passive transitions to Degraded
+   :id: REQ_0632
+   :status: open
+   :satisfies: FEAT_0049
+
+   When an interface reports an error-passive or error-warning
+   condition via an error frame, the gateway shall transition
+   that interface's sub-state to ``Degraded`` with a reason
+   identifying the interface and the kernel error class
+   (``DegradedReason::ErrorPassive { iface }``).
+
+.. req:: bus-off transitions to Down and triggers reconnect
+   :id: REQ_0633
+   :status: open
+   :satisfies: FEAT_0049
+
+   When an interface reports a bus-off condition via an error
+   frame, the gateway shall transition that interface's sub-state
+   to ``Down``, close the underlying socket, and schedule a
+   reopen attempt governed by the connector's
+   ``ReconnectPolicy``. Once the socket is reopened, the
+   gateway shall re-apply the per-interface filter
+   (:need:`REQ_0622`) before transitioning back through
+   ``Connecting``.
+
+.. req:: ReconnectPolicy reused; ExponentialBackoff default
+   :id: REQ_0634
+   :status: open
+   :satisfies: FEAT_0049
+
+   The CAN connector shall use the framework-level
+   ``ReconnectPolicy`` trait (:need:`REQ_0232`) with
+   ``ExponentialBackoff`` (:need:`REQ_0233`) as the default
+   implementation, configurable via
+   ``CanConnectorOptions::reconnect_policy``. This is the
+   EtherCAT posture (contrast :need:`REQ_0441` for Zenoh's
+   stack-internal posture) — SocketCAN exposes raw bus-off
+   events and the gateway owns the reopen.
+
+.. req:: HealthEvent emitted on every transition
+   :id: REQ_0635
+   :status: open
+   :satisfies: FEAT_0049
+
+   Every transition between ``ConnectorHealth`` variants —
+   including per-interface sub-state transitions that change the
+   aggregated state per :need:`REQ_0630` — shall emit one
+   ``HealthEvent`` on the connector's health channel
+   (re-affirms :need:`REQ_0234`).
+
+.. req:: Error frames not exposed to plugin
+   :id: REQ_0636
+   :status: open
+   :satisfies: FEAT_0049
+
+   No ``ChannelReader<T>`` shall ever observe a CAN error frame
+   as a ``Received<T>`` value. Error-frame visibility is confined
+   to the gateway and surfaced exclusively through
+   ``ConnectorHealth`` and ``HealthEvent``. This is the project
+   posture chosen during brainstorming over a plugin-visible
+   error channel; reconsider only if a downstream consumer
+   demonstrates a concrete need.
+
 ----
 
 Anti-goals
@@ -1195,6 +1592,60 @@ to keep the umbrella's traceability complete.
    process; restart policy is the host's responsibility, matching
    sonic-executor's existing posture.
 
+.. req:: NO DBC parsing or typed signal extraction in sonic-connector-can
+   :id: REQ_0640
+   :status: rejected
+   :satisfies: FEAT_0046
+
+   The CAN connector shall **not** parse Vector DBC files or perform
+   bit-/signal-level extraction from CAN payloads. The connector is
+   a raw-frame transport; typed signal codecs are a separate concern
+   for a future feature layered on top.
+
+.. req:: NO ISO-TP or J1939 support in sonic-connector-can
+   :id: REQ_0641
+   :status: rejected
+   :satisfies: FEAT_0046
+
+   The CAN connector shall **not** implement ISO-TP (ISO 15765-2)
+   segmentation or J1939 (PGN, transport protocol, address claim).
+   Applications needing higher-layer CAN protocols shall either
+   layer them above ``CanConnector`` or open a separate
+   ``CAN_ISOTP`` / ``CAN_J1939`` socket family connector in a
+   follow-on spec.
+
+.. req:: NO CAN-XL support
+   :id: REQ_0642
+   :status: rejected
+   :satisfies: FEAT_0046
+
+   The CAN connector shall **not** transport CAN-XL (CiA 610-1)
+   frames. The first cut targets classical CAN and CAN-FD only;
+   CAN-XL is deferred to a follow-on spec once the underlying
+   ``socketcan`` crate and the Linux kernel surface stabilise.
+
+.. req:: NO plugin-visible error-frame channel
+   :id: REQ_0643
+   :status: rejected
+   :satisfies: FEAT_0049
+
+   The CAN connector shall **not** expose CAN error frames as a
+   plugin-readable ``ChannelReader``. Error-frame consumption
+   stays inside the gateway and surfaces only through
+   ``ConnectorHealth`` / ``HealthEvent`` (re-affirms
+   :need:`REQ_0636`).
+
+.. req:: NO can-restart-ms management from the gateway
+   :id: REQ_0644
+   :status: rejected
+   :satisfies: FEAT_0049
+
+   The CAN connector shall **not** set the kernel's
+   ``can-restart-ms`` netlink attribute on owned interfaces.
+   Interface bring-up (``ip link set canX up type can …``) and
+   auto-restart configuration remain a host / sysadmin concern;
+   ``sonic-connector-can`` only opens the already-up interface.
+
 ----
 
 Cross-cutting traceability
@@ -1209,13 +1660,13 @@ directives) are emitted in :doc:`../verification/connector`.
 
 .. needtable::
    :types: feat
-   :filter: "FEAT_003" in id or id in ("FEAT_0041", "FEAT_0042", "FEAT_0043", "FEAT_0044", "FEAT_0045")
+   :filter: "FEAT_003" in id or id in ("FEAT_0041", "FEAT_0042", "FEAT_0043", "FEAT_0044", "FEAT_0045", "FEAT_0046", "FEAT_0047", "FEAT_0048", "FEAT_0049")
    :columns: id, title, status, satisfies
    :show_filters:
 
 .. needtable::
    :types: req
-   :filter: "REQ_02" in id or ("REQ_03" in id and id >= "REQ_0310") or "REQ_04" in id
+   :filter: "REQ_02" in id or ("REQ_03" in id and id >= "REQ_0310") or "REQ_04" in id or "REQ_05" in id
    :columns: id, title, status, satisfies
    :show_filters:
 
