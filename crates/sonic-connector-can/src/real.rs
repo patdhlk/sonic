@@ -31,8 +31,8 @@
 use socketcan::tokio::CanFdSocket;
 use socketcan::{
     CanAnyFrame, CanDataFrame, CanError, CanErrorFrame, CanFdFrame, CanFilter as ScCanFilter,
-    CanFrame as ScCanFrame, ControllerProblem, EmbeddedFrame, ExtendedId, Frame as ScFrame, Id,
-    SocketOptions, StandardId, frame::FdFlags as ScFdFlags,
+    EmbeddedFrame, ExtendedId, Id, SocketOptions, StandardId, errors::ControllerProblem,
+    frame::FdFlags as ScFdFlags,
 };
 
 use crate::driver::{
@@ -192,24 +192,23 @@ fn classify_error(frame: CanErrorFrame) -> CanErrorKind {
     }
 }
 
-/// Build an upstream classical `CanFrame::Data` from our `CanData`.
+/// Build an upstream classical [`CanDataFrame`] from our [`CanData`].
 ///
 /// # Errors
 ///
 /// [`CanIoError::Io`] when the upstream constructor rejects the
 /// (id, data) pair — typically because `data.len() > 8`.
-fn build_classical(data: &CanData) -> Result<ScCanFrame, CanIoError> {
+fn build_classical(data: &CanData) -> Result<CanDataFrame, CanIoError> {
     let id = to_id(data.id);
-    let frame = CanDataFrame::new(id, data.payload()).ok_or_else(|| {
+    CanDataFrame::new(id, data.payload()).ok_or_else(|| {
         CanIoError::Io(format!(
             "CanDataFrame::new rejected payload len {}",
             data.len
         ))
-    })?;
-    Ok(ScCanFrame::Data(frame))
+    })
 }
 
-/// Build an upstream FD frame from our `CanData`.
+/// Build an upstream FD frame from our [`CanData`].
 fn build_fd(data: &CanData) -> Result<CanFdFrame, CanIoError> {
     let id = to_id(data.id);
     let flags = fd_flags_to_socketcan(data.fd_flags);
@@ -303,18 +302,13 @@ impl CanInterfaceLike for RealCanInterface {
 
 fn map_any_frame(any: CanAnyFrame) -> CanFrame {
     match any {
-        CanAnyFrame::Normal(ScCanFrame::Data(d)) => CanFrame::Data(data_from_classical(&d)),
-        CanAnyFrame::Normal(ScCanFrame::Remote(r)) => CanFrame::Remote {
-            id: from_id(r.id()),
-            dlc: r.dlc() as u8,
-        },
-        CanAnyFrame::Normal(ScCanFrame::Error(e)) => CanFrame::Error(classify_error(e)),
-        CanAnyFrame::Fd(fd) => CanFrame::Data(data_from_fd(&fd)),
+        CanAnyFrame::Normal(d) => CanFrame::Data(data_from_classical(&d)),
         CanAnyFrame::Remote(r) => CanFrame::Remote {
             id: from_id(r.id()),
             dlc: r.dlc() as u8,
         },
         CanAnyFrame::Error(e) => CanFrame::Error(classify_error(e)),
+        CanAnyFrame::Fd(fd) => CanFrame::Data(data_from_fd(&fd)),
     }
 }
 
@@ -392,15 +386,16 @@ mod tests {
     }
 
     #[test]
-    fn build_classical_payload_too_long_returns_io_error() {
+    fn build_classical_8_byte_frame_succeeds() {
         let data = CanData::new(
             CanId::standard(0x100).unwrap(),
             CanFrameKind::Classical,
             CanFdFlags::empty(),
-            &[0u8; 8],
+            &[1, 2, 3, 4, 5, 6, 7, 8],
         )
         .unwrap();
         let frame = build_classical(&data).expect("8-byte classical frame builds");
-        assert!(matches!(frame, ScCanFrame::Data(_)));
+        assert_eq!(frame.data().len(), 8);
+        assert_eq!(frame.id(), to_id(CanId::standard(0x100).unwrap()));
     }
 }
