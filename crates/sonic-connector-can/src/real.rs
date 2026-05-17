@@ -87,7 +87,7 @@ impl RealCanInterface {
 /// [`crate::filter::filter_for`]) into the upstream `socketcan`
 /// representation. The kernel's `struct can_filter` semantics are
 /// identical, so this is a transparent newtype shuffle.
-fn to_socketcan_filter(f: &CanFilter) -> ScCanFilter {
+fn to_socketcan_filter(f: CanFilter) -> ScCanFilter {
     ScCanFilter::new(f.can_id, f.can_mask)
 }
 
@@ -231,7 +231,8 @@ impl CanInterfaceLike for RealCanInterface {
 
     fn apply_filter(&mut self, filters: &[CanFilter]) -> Result<(), CanIoError> {
         let socket = self.require_socket()?;
-        let sc_filters: Vec<ScCanFilter> = filters.iter().map(to_socketcan_filter).collect();
+        let sc_filters: Vec<ScCanFilter> =
+            filters.iter().copied().map(to_socketcan_filter).collect();
         socket
             .set_filters(&sc_filters)
             .map_err(|e| CanIoError::Io(format!("set_filters: {e}")))
@@ -348,16 +349,15 @@ mod tests {
             can_id: 0x123 | CAN_EFF_FLAG,
             can_mask: 0x7FF | CAN_EFF_FLAG,
         };
-        let sc = to_socketcan_filter(&f);
-        // ScCanFilter does not expose its inner fields, but the
-        // round-trip via its Debug impl preserves the bits.
-        let dbg = format!("{sc:?}");
-        assert!(
-            dbg.contains("8000_07FF")
-                || dbg.contains("80000123")
-                || dbg.contains(&format!("{:08x}", f.can_id)),
-            "filter debug should contain folded can_id; got: {dbg}"
-        );
+        let sc = to_socketcan_filter(f);
+        // `ScCanFilter` derives `PartialEq` and `AsRef<libc::can_filter>`
+        // — both available paths to verify the round-trip cleanly
+        // without parsing Debug output.
+        let expected = ScCanFilter::new(f.can_id, f.can_mask);
+        assert_eq!(sc, expected);
+        let raw = sc.as_ref();
+        assert_eq!(raw.can_id, f.can_id);
+        assert_eq!(raw.can_mask, f.can_mask);
     }
 
     #[test]

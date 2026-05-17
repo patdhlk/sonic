@@ -86,8 +86,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install vcan kernel module + iproute2
+        # GitHub-hosted Ubuntu runners ship the base kernel but not
+        # the modules-extra package that contains `vcan.ko`. Install
+        # the matching modules-extra package before modprobe.
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            "linux-modules-extra-$(uname -r)" iproute2
       - name: Set up vcan0
         run: |
+          set -eux
           sudo modprobe vcan
           sudo ip link add dev vcan0 type vcan
           sudo ip link set up vcan0
