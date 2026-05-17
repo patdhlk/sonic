@@ -2343,14 +2343,15 @@ spec text that needed amendment during implementation.
    ``:status: draft`` until the ``zenoh-integration`` and
    ``ZENOH_TEST_ROUTER`` CI jobs land.
 
-.. impl:: sonic-connector-can crate (planned)
+.. impl:: sonic-connector-can crate (layer-1)
    :id: IMPL_0080
-   :status: draft
+   :status: open
    :implements: BB_0070
    :refines: REQ_0600, REQ_0601, REQ_0602, REQ_0603, REQ_0604, REQ_0605, REQ_0606, REQ_0607, REQ_0608, REQ_0610, REQ_0611, REQ_0612, REQ_0613, REQ_0614, REQ_0615, REQ_0620, REQ_0621, REQ_0622, REQ_0623, REQ_0624, REQ_0625, REQ_0630, REQ_0631, REQ_0632, REQ_0633, REQ_0634, REQ_0635, REQ_0636
 
-   **Crate.** ``crates/sonic-connector-can`` (planned; not yet
-   scaffolded). Default deps: ``sonic-connector-core``,
+   **Crate.** ``crates/sonic-connector-can`` (layer-1 landed;
+   real ``socketcan::tokio::*`` integration deferred to layer-2).
+   Default deps: ``sonic-connector-core``,
    ``sonic-connector-transport-iox``, ``sonic-connector-host``,
    ``sonic-executor``, ``crossbeam-channel``, ``tokio`` (``rt`` +
    ``rt-multi-thread`` + ``macros`` + ``sync``). Optional

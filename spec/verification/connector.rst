@@ -877,7 +877,7 @@ vcan && ip link set up vcan0``).
 .. test:: Classical CAN round-trip via MockCanInterface
    :id: TEST_0502
    :status: open
-   :verifies: REQ_0610, REQ_0613, REQ_0614
+   :verifies: REQ_0610, REQ_0612, REQ_0613, REQ_0614
 
    Layer-1 end-to-end test: ``CanConnector`` over
    ``MockCanInterface`` with one outbound and one inbound channel
@@ -1023,7 +1023,7 @@ vcan && ip link set up vcan0``).
 .. test:: Error frames not exposed to plugin
    :id: TEST_0513
    :status: open
-   :verifies: REQ_0636, REQ_0643
+   :verifies: REQ_0631, REQ_0636, REQ_0643
 
    Regression-guard for the explicit anti-requirement
    :need:`REQ_0643`. Inject error frames of every classified

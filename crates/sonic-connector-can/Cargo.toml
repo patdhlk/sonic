@@ -1,0 +1,64 @@
+[package]
+name         = "sonic-connector-can"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "CAN (SocketCAN) reference connector for the sonic-connector framework. Implements BB_0070 (FEAT_0046)."
+
+[features]
+default = []
+# `socketcan-integration` will pull the real `socketcan` crate (with
+# its `tokio` feature) and expose `RealCanInterface` once layer-2
+# lands. Declared empty in layer-1 so the cargo feature exists
+# (REQ_0503) but does not pull a Linux-only dep on macOS / Windows.
+# The follow-on layer-2 commit will swap this to
+# `["dep:socketcan"]` with the dep declared under a
+# `cfg(target_os = "linux")` target table. Mirrors `bus-integration`
+# (BB_0030) and `zenoh-integration` (BB_0040).
+socketcan-integration = []
+
+[dependencies]
+sonic-connector-core           = { path = "../sonic-connector-core" }
+sonic-connector-transport-iox  = { path = "../sonic-connector-transport-iox" }
+sonic-connector-host           = { path = "../sonic-connector-host" }
+sonic-executor                 = { path = "../sonic-executor" }
+iceoryx2                       = { workspace = true }
+crossbeam-channel              = { workspace = true }
+tokio                          = { workspace = true }
+serde                          = { workspace = true, features = ["std"] }
+thiserror                      = { workspace = true }
+bitflags                       = { workspace = true }
+
+[dev-dependencies]
+sonic-connector-codec = { path = "../sonic-connector-codec" }
+sonic-bounded-alloc   = { path = "../sonic-bounded-alloc" }
+serde_json            = { workspace = true, features = ["std"] }
+
+[lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions        = "allow"
+must_use_candidate             = "allow"
+missing_errors_doc             = "allow"
+missing_panics_doc             = "allow"   # poisoned-mutex `expect` is the project convention
+cast_possible_truncation       = "allow"   # CAN DLC / payload sizes bounded by construction
+significant_drop_tightening    = "allow"   # registry guard intentionally held across iter
+manual_async_fn                = "allow"   # `impl Future` is intentional in CanInterfaceLike
+similar_names                  = "allow"   # r1/r2/r3 helper names in tests
+option_if_let_else             = "allow"   # readability preference
+unnecessary_literal_bound      = "allow"
+missing_const_for_fn           = "allow"
+unreadable_literal             = "allow"
+match_same_arms                = "allow"
+useless_conversion             = "allow"
+needless_continue              = "allow"
+ignored_unit_patterns          = "allow"
+items_after_statements         = "allow"
+too_long_first_doc_paragraph   = "allow"
