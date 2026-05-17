@@ -1,6 +1,7 @@
 //! CAN (SocketCAN) reference connector — `BB_0070` / `FEAT_0046`.
 //!
-//! Layer-1 implementation in this commit:
+//! Layer-1 (always available — portable across Linux / macOS /
+//! Windows for development and testing):
 //!
 //! * [`routing`] — typed `CanRouting`, `CanIface`, `CanId`,
 //!   `CanFrameKind`, `CanFdFlags` (`REQ_0601`, `REQ_0615`).
@@ -25,11 +26,17 @@
 //! * [`connector::CanConnector`] — implements
 //!   [`sonic_connector_host::Connector`] (`REQ_0600`).
 //!
-//! Real `socketcan::tokio::*` integration (layer-2) lives behind the
-//! default-off `socketcan-integration` cargo feature (`REQ_0503`) and
-//! is deferred to a follow-on commit. Until then, layer-1 tests cover
-//! the full envelope ↔ MockCanInterface ↔ envelope hop and the
-//! bus-off → reconnect state machine.
+//! Layer-2 (Linux-only, gated behind the default-off
+//! `socketcan-integration` cargo feature per `REQ_0503` / `REQ_0502`):
+//!
+//! * `RealCanInterface` (in `real` module — compiled only when both
+//!   `feature = "socketcan-integration"` and
+//!   `target_os = "linux"` hold) — wraps
+//!   `socketcan::tokio::CanFdSocket`. Always FD-aware (one socket
+//!   per interface handles both classical and FD frames); error
+//!   frames enabled at open (`REQ_0631`). Verified by the
+//!   `tests/vcan_smoke.rs` integration test (`TEST_0512`) when the
+//!   kernel `vcan` module is loaded.
 //!
 //! [`HealthEvent`]: sonic_connector_core::HealthEvent
 
@@ -49,6 +56,8 @@ pub mod gateway;
 pub mod health;
 pub mod mock;
 pub mod options;
+#[cfg(all(feature = "socketcan-integration", target_os = "linux"))]
+pub mod real;
 pub mod registry;
 pub mod routing;
 
@@ -66,6 +75,8 @@ pub use gateway::CanGateway;
 pub use health::{CanHealthMonitor, IfaceHealthKind};
 pub use mock::{MockCanInterface, MockCanState};
 pub use options::{CanConnectorOptions, CanConnectorOptionsBuilder};
+#[cfg(all(feature = "socketcan-integration", target_os = "linux"))]
+pub use real::RealCanInterface;
 pub use registry::{
     ChannelBinding, ChannelHandle, ChannelRegistry, Direction, InboundPublish, OutboundDrain,
     RegisteredChannel,

@@ -2421,19 +2421,33 @@ spec text that needed amendment during implementation.
      error-frame injection for testing
      ``Connecting → Up → Degraded → Down → Connecting`` walks
      against :need:`ARCH_0062`.
-   * ``RealCanInterface`` — thin wrapper over the upstream
-     ``socketcan`` crate's async sockets
-     (``socketcan::tokio::CanSocket`` for classical,
-     ``socketcan::tokio::CanFdSocket`` for FD); lives behind the
-     ``socketcan-integration`` cargo feature, which also enables
-     the upstream crate's ``tokio`` feature. Owns the
-     ``CAP_NET_RAW`` socket bind and the ``CAN_RAW_ERR_FILTER``
-     ``setsockopt`` for error-frame reporting (:need:`REQ_0631`).
-     The Linux raw-socket smoke test (:need:`TEST_0512`) follows
-     the upstream crate's ``vcan_tests`` posture: gate the CI job
-     on the ``vcan`` kernel module being loaded
-     (``./scripts/vcan.sh``) so the test only runs where ``vcan0``
-     actually exists.
+   * ``RealCanInterface`` — landed in layer-2. Wraps a single
+     ``socketcan::tokio::CanFdSocket`` per interface; the kernel's
+     FD-aware socket (set via ``CAN_RAW_FD_FRAMES``, applied
+     automatically by ``CanFdSocket::open_addr``) transparently
+     handles both classical and FD frames so one socket per
+     interface suffices regardless of which frame kinds the
+     registered channels declare. Lives behind the
+     ``socketcan-integration`` cargo feature (which also enables
+     the upstream crate's ``tokio`` feature) and is target-gated
+     to ``cfg(target_os = "linux")`` because the ``socketcan``
+     crate's build script rejects non-Linux targets
+     (:need:`REQ_0502`). The dep itself is declared under a
+     ``[target.'cfg(target_os = "linux")'.dependencies]`` table so
+     enabling the feature on macOS / Windows is a no-op rather
+     than a build failure. Owns the ``CAP_NET_RAW`` socket bind
+     and calls ``set_error_filter_accept_all`` at open + on every
+     reopen to enable error-frame reporting (:need:`REQ_0631`).
+     ``recv`` translates ``CanAnyFrame`` (``Normal(Data/Remote/Error)``
+     or ``Fd``) into the framework's ``CanFrame`` enum;
+     ``CanError`` is classified via the table in
+     :need:`ARCH_0062` (``BusOff``, ``ControllerProblem(Receive|
+     Transmit Error{Warning|Passive})``, ``LostArbitration``, …).
+     The Linux raw-socket smoke test (:need:`TEST_0512`) brings
+     up ``vcan0`` via ``modprobe vcan`` and runs the ignored
+     ``tests/vcan_smoke.rs`` integration test with
+     ``--include-ignored`` so it only fires on the ``vcan-smoke``
+     CI job, never on plain ``cargo test``.
    * ``PerIfaceFilter`` (pure-logic helper, :need:`BB_0074`) —
      compiles the union of ``(can_id, mask, extended)`` tuples
      from registered readers into a single

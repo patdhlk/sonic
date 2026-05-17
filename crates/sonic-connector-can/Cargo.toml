@@ -10,15 +10,16 @@ description  = "CAN (SocketCAN) reference connector for the sonic-connector fram
 
 [features]
 default = []
-# `socketcan-integration` will pull the real `socketcan` crate (with
-# its `tokio` feature) and expose `RealCanInterface` once layer-2
-# lands. Declared empty in layer-1 so the cargo feature exists
-# (REQ_0503) but does not pull a Linux-only dep on macOS / Windows.
-# The follow-on layer-2 commit will swap this to
-# `["dep:socketcan"]` with the dep declared under a
-# `cfg(target_os = "linux")` target table. Mirrors `bus-integration`
-# (BB_0030) and `zenoh-integration` (BB_0040).
-socketcan-integration = []
+# `socketcan-integration` pulls the real `socketcan` crate (with its
+# `tokio` feature) and exposes `RealCanInterface`. Off by default so
+# consumers that only want the framework types and
+# `MockCanInterface` don't pull socketcan's transitive deps. The
+# actual `socketcan` dep is declared under a `cfg(target_os =
+# "linux")` target table — enabling this feature on non-Linux is a
+# no-op (no `dep:` reference fails because cargo's target-cfg
+# matching elides absent deps). Mirrors `bus-integration`
+# (BB_0030) and `zenoh-integration` (BB_0040). REQ_0503.
+socketcan-integration = ["dep:socketcan"]
 
 [dependencies]
 sonic-connector-core           = { path = "../sonic-connector-core" }
@@ -31,6 +32,14 @@ tokio                          = { workspace = true }
 serde                          = { workspace = true, features = ["std"] }
 thiserror                      = { workspace = true }
 bitflags                       = { workspace = true }
+
+# Real socketcan dep — Linux-only. The kernel `PF_CAN` socket family
+# is Linux-specific (REQ_0502); the `socketcan` crate's build.rs
+# rejects non-Linux targets, so we gate the dep itself rather than
+# the feature. Enabling `socketcan-integration` on macOS / Windows
+# is a no-op (no `dep:socketcan` is resolved).
+[target.'cfg(target_os = "linux")'.dependencies]
+socketcan = { version = "3", optional = true, default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 sonic-connector-codec = { path = "../sonic-connector-codec" }

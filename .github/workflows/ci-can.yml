@@ -1,0 +1,100 @@
+name: ci-can
+
+# Connector-can focused CI: Linux-only matrix (REQ_0502),
+# dep-gating, layer-2 socketcan-integration build, and the
+# vcan-backed smoke test (TEST_0512). The workspace ci.yml job
+# covers default-feature builds on macOS — this workflow exercises
+# the kernel-PF_CAN path that only makes sense on Linux.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # 1. Default-feature build + test on Linux. Layer-1 only; no
+  #    socketcan-integration, no vcan.
+  build-test-default:
+    name: build+test default (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build sonic-connector-can (default features)
+        run: cargo build -p sonic-connector-can --all-targets
+      - name: Test sonic-connector-can (default features)
+        run: cargo test -p sonic-connector-can -- --test-threads=1
+
+  # 2. Layer-2 build with socketcan-integration on Linux. Compiles
+  #    `RealCanInterface` and verifies the in-module pure-logic
+  #    tests for the type conversions pass.
+  feature-socketcan-integration-linux:
+    name: feature socketcan-integration (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with socketcan-integration feature
+        run: cargo build -p sonic-connector-can --features socketcan-integration --all-targets
+      - name: Test with socketcan-integration feature (no vcan)
+        run: cargo test -p sonic-connector-can --features socketcan-integration -- --test-threads=1
+
+  # 3. Dependency gating script (TEST_0511) — asserts the
+  #    socketcan-integration feature gates the real socketcan dep
+  #    (REQ_0503).
+  dep-gating:
+    name: dep gating (TEST_0511)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run dep gating script
+        run: bash scripts/check_dep_gating_can.sh
+
+  # 4. Connector-scoped clippy under both feature configurations.
+  clippy-can:
+    name: clippy (sonic-connector-can)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (default features)
+        run: cargo clippy -p sonic-connector-can --all-targets -- -D warnings
+      - name: Clippy (socketcan-integration feature)
+        run: cargo clippy -p sonic-connector-can --all-targets --features socketcan-integration -- -D warnings
+
+  # 5. Vcan smoke test (TEST_0512). Loads the kernel `vcan` module
+  #    and brings up `vcan0`, then runs the ignored
+  #    `tests/vcan_smoke.rs` integration test with
+  #    `--include-ignored`. Verifies REQ_0502 + REQ_0613 + REQ_0614
+  #    against the real Linux PF_CAN stack.
+  vcan-smoke:
+    name: vcan smoke (TEST_0512)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up vcan0
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link set up vcan0
+          ip link show vcan0
+      - name: Run TEST_0512 (vcan_smoke)
+        run: |
+          cargo test -p sonic-connector-can \
+            --features socketcan-integration \
+            --test vcan_smoke \
+            -- --test-threads=1 --include-ignored

@@ -995,8 +995,9 @@ vcan && ip link set up vcan0``).
 
 .. test:: socketcan-integration feature gates the real socketcan dep
    :id: TEST_0511
-   :status: open
+   :status: implemented
    :verifies: REQ_0603, REQ_0604
+   :links: BB_0070, IMPL_0080
 
    Build the crate twice — once with default features, once with
    ``--features socketcan-integration`` — and assert that the
@@ -1004,21 +1005,31 @@ vcan && ip link set up vcan0``).
    introspection) while the feature build does. Both builds
    expose ``MockCanInterface``. Realised as
    ``scripts/check_dep_gating_can.sh`` invoked from the
-   ``dep-gating`` job in ``.github/workflows/ci-can.yml``.
+   ``dep-gating`` job in ``.github/workflows/ci-can.yml``. The
+   feature-build assertion runs on Linux only — the ``socketcan``
+   dep is declared under a ``cfg(target_os = "linux")`` target
+   table per :need:`REQ_0502`, so non-Linux hosts legitimately
+   omit it; the script reports a skip notice in that case.
 
 .. test:: Linux raw-socket smoke against vcan0
    :id: TEST_0512
-   :status: draft
-   :verifies: REQ_0602, REQ_0613, REQ_0614
+   :status: implemented
+   :verifies: REQ_0502, REQ_0613, REQ_0614
+   :links: BB_0070, IMPL_0080
 
    Layer-2 integration test (``socketcan-integration`` feature,
    Linux only): require ``vcan0`` present (``modprobe vcan && ip
    link add dev vcan0 type vcan && ip link set up vcan0``). Open
-   one outbound and one inbound classical channel on ``vcan0``,
-   send 10 frames, assert they round-trip via the real kernel
-   PF_CAN stack. Status remains ``draft`` until the
-   ``socketcan-integration`` CI job and the kernel ``vcan``
-   module are wired into CI.
+   two ``RealCanInterface`` instances bound to ``vcan0`` (one
+   sending, one receiving, exploiting PF_CAN raw-socket broadcast
+   semantics), apply an accept-all filter on the rx side, send
+   10 classical frames carrying small distinct payloads, and
+   assert each round-trips byte-for-byte with the correct CAN
+   identifier and ``extended`` flag. Realised as
+   ``crates/sonic-connector-can/tests/vcan_smoke.rs``, gated
+   ``#[ignore]`` so plain ``cargo test`` skips it; the
+   ``vcan-smoke`` job in ``.github/workflows/ci-can.yml`` runs
+   it with ``--include-ignored`` after bringing up ``vcan0``.
 
 .. test:: Error frames not exposed to plugin
    :id: TEST_0513
