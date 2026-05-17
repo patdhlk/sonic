@@ -12,6 +12,7 @@ Test cases verifying requirements. Each ``test`` directive
    plc-runtime
    bounded-alloc
    device-codegen
+   canopen-codegen
 
 .. needtable::
    :types: test

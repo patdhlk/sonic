@@ -278,8 +278,9 @@ requirement or feature it answers.
 
 .. arch-decision:: Future CANopen support via shared OD IR
    :id: ADR_0073
-   :status: open
+   :status: accepted
    :refines: FEAT_0050
+   :links: ADR_0078
 
    **Context.** EtherCAT's CoE inherits the CANopen Object
    Dictionary (CiA 301) wholesale: index/subindex addressing,
@@ -299,6 +300,11 @@ requirement or feature it answers.
    shape. ❌ Future refactor required to lift OD types out of
    ``ethercat-esi``. Manageable — the lift is mechanical because
    parser and IR are already decoupled (per :need:`ADR_0070`).
+
+   **Closure.** Closed by :need:`ADR_0078`. The lift is performed
+   as part of :need:`FEAT_0060` "CANopen device-driver codegen
+   toolchain"; see :doc:`canopen-codegen` for the executed
+   decomposition.
 
 .. arch-decision:: Vendor extensions captured as opaque blobs
    :id: ADR_0074

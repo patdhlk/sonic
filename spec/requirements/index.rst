@@ -18,6 +18,11 @@ top-level features:
   layered crates that translate EtherCAT ESI XML into strongly-typed
   Rust device drivers, consumed by ``sonic-connector-ethercat`` and
   any other ethercrab user. See :doc:`device-codegen`.
+* :need:`FEAT_0060` "CANopen device-driver codegen toolchain" —
+  build-time layered crates that translate CANopen EDS (CiA 306)
+  files into strongly-typed Rust device drivers, with a shared
+  ``fieldbus-od-core`` OD IR co-owned by the EtherCAT toolchain.
+  See :doc:`canopen-codegen`.
 
 Each ``req`` directive ``:satisfies:`` one ``feat`` parent; each
 capability-cluster ``feat`` ``:satisfies:`` its top-level umbrella feature.
@@ -29,6 +34,7 @@ capability-cluster ``feat`` ``:satisfies:`` its top-level umbrella feature.
    connector
    bounded-alloc
    device-codegen
+   canopen-codegen
 
 Requirements at a glance
 ------------------------

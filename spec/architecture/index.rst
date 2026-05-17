@@ -15,6 +15,7 @@ detailed-design notes that predate the arc42 adoption.
    plc-runtime
    bounded-alloc
    device-codegen
+   canopen-codegen
    safety
 
 Building blocks
